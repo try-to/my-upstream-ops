@@ -89,6 +89,60 @@ func TestGetCosts(t *testing.T) {
 	}
 }
 
+func TestGetCostsAppliesUpstreamRechargeMultiplier(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/usage/dashboard/stats", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":0,"message":"","data":{"today_actual_cost":14.4,"total_actual_cost":72}}`))
+	})
+	mux.HandleFunc("/api/v1/payment/checkout-info", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":0,"message":"","data":{"balance_recharge_multiplier":7.2}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	res, err := c.GetCosts(context.Background(), &connector.Channel{
+		SiteURL:                srv.URL,
+		RechargeMultiplierMode: connector.RechargeMultiplierModeDivide,
+	}, &connector.AuthSession{
+		AccessToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("GetCosts: %v", err)
+	}
+	if res.TodayCost != 2 {
+		t.Fatalf("today cost = %v, want 2", res.TodayCost)
+	}
+	if res.TotalCost != 10 {
+		t.Fatalf("total cost = %v, want 10", res.TotalCost)
+	}
+}
+
+func TestGetBalanceAppliesManualRechargeMultiplier(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/auth/me", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":0,"message":"","data":{"balance":12.5}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	multiplier := 3.0
+	res, err := c.GetBalance(context.Background(), &connector.Channel{
+		SiteURL:                srv.URL,
+		RechargeMultiplier:     &multiplier,
+		RechargeMultiplierMode: connector.RechargeMultiplierModeMultiply,
+	}, &connector.AuthSession{
+		AccessToken: "token",
+	})
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if res.Balance != 37.5 {
+		t.Fatalf("balance = %v, want 37.5", res.Balance)
+	}
+}
+
 func TestGetRechargeInfo(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/payment/checkout-info", func(w http.ResponseWriter, r *http.Request) {

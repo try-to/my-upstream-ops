@@ -1,6 +1,9 @@
 package storage
 
 import (
+	"errors"
+	"strings"
+
 	"gorm.io/gorm"
 )
 
@@ -13,6 +16,10 @@ func (r *Channels) Create(c *Channel) error { return r.db.Create(c).Error }
 func (r *Channels) Update(c *Channel) error { return r.db.Save(c).Error }
 func (r *Channels) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := tx.Select("id", "name").First(&channel, id).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		if err := tx.Where("channel_id = ?", id).Delete(&AuthSession{}).Error; err != nil {
 			return err
 		}
@@ -23,8 +30,19 @@ func (r *Channels) Delete(id uint) error {
 			&CostSnapshot{},
 			&MonitorLog{},
 			&NotificationCooldown{},
+			&UpstreamAnnouncement{},
 		} {
 			if err := tx.Where("channel_id = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("upstream_channel_id = ?", id).Delete(&NotificationLog{}).Error; err != nil {
+			return err
+		}
+		if channel.Name != "" {
+			pattern := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(channel.Name) + "%"
+			if err := tx.Where("upstream_channel_id = 0 AND (subject LIKE ? ESCAPE '!' OR body LIKE ? ESCAPE '!')", pattern, pattern).
+				Delete(&NotificationLog{}).Error; err != nil {
 				return err
 			}
 		}

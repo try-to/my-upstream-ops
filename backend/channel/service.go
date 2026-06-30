@@ -136,21 +136,23 @@ type Sub2APITokenCredential struct {
 //   - password: Password 必填；Username 为登录账号
 //   - token:    TokenCredential 必填（已序列化为 JSON 字符串）；Username 仅作展示备注
 type CreateInput struct {
-	Name                string
-	Type                storage.ChannelType
-	SiteURL             string
-	Username            string
-	Password            string
-	CredentialMode      storage.CredentialMode
-	TokenCredential     string // JSON：password 模式时为空
-	LoginExtraParams    string
-	TurnstileEnabled    bool
-	IgnoreAnnouncements bool
-	SubscriptionEnabled bool
-	ProxyEnabled        bool
-	CaptchaConfigID     *uint
-	BalanceThreshold    float64
-	MonitorEnabled      bool
+	Name                   string
+	Type                   storage.ChannelType
+	SiteURL                string
+	Username               string
+	Password               string
+	CredentialMode         storage.CredentialMode
+	TokenCredential        string // JSON：password 模式时为空
+	LoginExtraParams       string
+	TurnstileEnabled       bool
+	IgnoreAnnouncements    bool
+	SubscriptionEnabled    bool
+	ProxyEnabled           bool
+	CaptchaConfigID        *uint
+	BalanceThreshold       float64
+	RechargeMultiplier     *float64
+	RechargeMultiplierMode string
+	MonitorEnabled         bool
 }
 
 func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
@@ -175,20 +177,22 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 		return nil, fmt.Errorf("encrypt credential: %w", err)
 	}
 	c := &storage.Channel{
-		Name:                in.Name,
-		Type:                in.Type,
-		SiteURL:             in.SiteURL,
-		Username:            in.Username,
-		PasswordCipher:      enc,
-		CredentialMode:      mode,
-		LoginExtraParams:    loginExtraParams,
-		TurnstileEnabled:    in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
-		IgnoreAnnouncements: in.IgnoreAnnouncements,
-		SubscriptionEnabled: in.SubscriptionEnabled,
-		ProxyEnabled:        in.ProxyEnabled,
-		CaptchaConfigID:     in.CaptchaConfigID,
-		BalanceThreshold:    in.BalanceThreshold,
-		MonitorEnabled:      in.MonitorEnabled,
+		Name:                   in.Name,
+		Type:                   in.Type,
+		SiteURL:                in.SiteURL,
+		Username:               in.Username,
+		PasswordCipher:         enc,
+		CredentialMode:         mode,
+		LoginExtraParams:       loginExtraParams,
+		TurnstileEnabled:       in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
+		IgnoreAnnouncements:    in.IgnoreAnnouncements,
+		SubscriptionEnabled:    in.SubscriptionEnabled,
+		ProxyEnabled:           in.ProxyEnabled,
+		CaptchaConfigID:        in.CaptchaConfigID,
+		BalanceThreshold:       in.BalanceThreshold,
+		RechargeMultiplier:     normalizeRechargeMultiplier(in.RechargeMultiplier),
+		RechargeMultiplierMode: connector.NormalizeRechargeMultiplierMode(in.RechargeMultiplierMode),
+		MonitorEnabled:         in.MonitorEnabled,
 	}
 	if mode == storage.CredentialModeToken {
 		// token 模式不依赖打码 provider
@@ -202,20 +206,22 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 
 // UpdateInput 编辑渠道的可选字段。Password / TokenCredential 为空表示不修改凭据。
 type UpdateInput struct {
-	Name                *string
-	SiteURL             *string
-	Username            *string
-	Password            *string
-	CredentialMode      *storage.CredentialMode
-	TokenCredential     *string // JSON
-	LoginExtraParams    *string
-	TurnstileEnabled    *bool
-	IgnoreAnnouncements *bool
-	SubscriptionEnabled *bool
-	ProxyEnabled        *bool
-	CaptchaConfigID     *uint
-	BalanceThreshold    *float64
-	MonitorEnabled      *bool
+	Name                   *string
+	SiteURL                *string
+	Username               *string
+	Password               *string
+	CredentialMode         *storage.CredentialMode
+	TokenCredential        *string // JSON
+	LoginExtraParams       *string
+	TurnstileEnabled       *bool
+	IgnoreAnnouncements    *bool
+	SubscriptionEnabled    *bool
+	ProxyEnabled           *bool
+	CaptchaConfigID        *uint
+	BalanceThreshold       *float64
+	RechargeMultiplier     *float64
+	RechargeMultiplierMode *string
+	MonitorEnabled         *bool
 }
 
 func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
@@ -315,6 +321,12 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 	if in.BalanceThreshold != nil {
 		c.BalanceThreshold = *in.BalanceThreshold
 	}
+	if in.RechargeMultiplier != nil {
+		c.RechargeMultiplier = normalizeRechargeMultiplier(in.RechargeMultiplier)
+	}
+	if in.RechargeMultiplierMode != nil {
+		c.RechargeMultiplierMode = connector.NormalizeRechargeMultiplierMode(*in.RechargeMultiplierMode)
+	}
 	if in.MonitorEnabled != nil {
 		c.MonitorEnabled = *in.MonitorEnabled
 	}
@@ -322,6 +334,13 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+func normalizeRechargeMultiplier(v *float64) *float64 {
+	if v == nil || *v <= 0 {
+		return nil
+	}
+	return v
 }
 
 func normalizeLoginExtraParams(raw string) (string, error) {
@@ -424,13 +443,15 @@ func (s *Service) Resolve(ctx context.Context, c *storage.Channel) (*connector.C
 		return nil, fmt.Errorf("decrypt credential: %w", err)
 	}
 	resolved := &connector.Channel{
-		ID:               c.ID,
-		Name:             c.Name,
-		Type:             connector.ChannelType(c.Type),
-		SiteURL:          c.SiteURL,
-		Username:         c.Username,
-		LoginExtraParams: nil,
-		TurnstileEnabled: c.TurnstileEnabled,
+		ID:                     c.ID,
+		Name:                   c.Name,
+		Type:                   connector.ChannelType(c.Type),
+		SiteURL:                c.SiteURL,
+		Username:               c.Username,
+		LoginExtraParams:       nil,
+		TurnstileEnabled:       c.TurnstileEnabled,
+		RechargeMultiplier:     c.RechargeMultiplier,
+		RechargeMultiplierMode: connector.NormalizeRechargeMultiplierMode(c.RechargeMultiplierMode),
 	}
 	loginExtraParams, err := parseLoginExtraParams(c.LoginExtraParams)
 	if err != nil {

@@ -104,6 +104,74 @@ func TestGetCosts(t *testing.T) {
 	}
 }
 
+func TestGetCostsAppliesManualRechargeMultiplier(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota_per_unit":500000}}`))
+	})
+	mux.HandleFunc("/api/log/self/stat", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota":1000000}}`))
+	})
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"used_quota":5000000}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	multiplier := 2.0
+	res, err := c.GetCosts(context.Background(), &connector.Channel{
+		SiteURL:                srv.URL,
+		RechargeMultiplier:     &multiplier,
+		RechargeMultiplierMode: connector.RechargeMultiplierModeDivide,
+	}, &connector.AuthSession{
+		Cookie: "session=1",
+		UserID: "7",
+	})
+	if err != nil {
+		t.Fatalf("GetCosts: %v", err)
+	}
+	if res.TodayCost != 1 {
+		t.Fatalf("today cost = %v, want 1", res.TodayCost)
+	}
+	if res.TotalCost != 5 {
+		t.Fatalf("total cost = %v, want 5", res.TotalCost)
+	}
+}
+
+func TestGetCostsAppliesUpstreamRechargeMultiplier(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota_per_unit":500000,"price":7.2}}`))
+	})
+	mux.HandleFunc("/api/log/self/stat", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota":1000000}}`))
+	})
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"used_quota":5000000}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New()
+	res, err := c.GetCosts(context.Background(), &connector.Channel{
+		SiteURL:                srv.URL,
+		RechargeMultiplierMode: connector.RechargeMultiplierModeDivide,
+	}, &connector.AuthSession{
+		Cookie: "session=1",
+		UserID: "7",
+	})
+	if err != nil {
+		t.Fatalf("GetCosts: %v", err)
+	}
+	if res.TodayCost != 14.4 {
+		t.Fatalf("today cost = %v, want 14.4", res.TodayCost)
+	}
+	if res.TotalCost != 72 {
+		t.Fatalf("total cost = %v, want 72", res.TotalCost)
+	}
+}
+
 func TestGetRechargeInfo(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/user/topup/info", func(w http.ResponseWriter, r *http.Request) {

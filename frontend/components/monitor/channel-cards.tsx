@@ -87,6 +87,14 @@ function StatTile({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
+function rechargeMultiplierTip(c: Channel) {
+  const mode = c.recharge_multiplier_mode === "multiply" ? "余额 × 倍率" : "余额 / 倍率"
+  if (c.recharge_multiplier != null && c.recharge_multiplier > 0) {
+    return `充值倍率：${decimal(c.recharge_multiplier, 4)}（${mode}）`
+  }
+  return `充值倍率：跟随上游（${mode}）`
+}
+
 /** ratioTone 按倍率给 chip 上色，与 ChannelRatesPanel 共用同一套规则。 */
 function ratioTone(r: number): string {
   if (r <= 0.8) return "bg-success/10 text-success ring-success/20"
@@ -624,7 +632,16 @@ export function ChannelCards() {
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    <StatTile label="余额">{money(c.last_balance)}</StatTile>
+                    <StatTile label="余额">
+                      <Tooltip delayDuration={150}>
+                        <TooltipTrigger asChild>
+                          <span className="block truncate">{money(c.last_balance)}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          {rechargeMultiplierTip(c)}
+                        </TooltipContent>
+                      </Tooltip>
+                    </StatTile>
                     <StatTile label="今日消费">{money(c.today_cost)}</StatTile>
                     <StatTile label="累计消费">{money(c.total_cost)}</StatTile>
                     <StatTile label="阈值 / 状态">

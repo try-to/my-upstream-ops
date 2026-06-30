@@ -27,7 +27,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import type { Channel, ChannelType, CredentialMode } from "@/lib/api-types"
+import type { Channel, ChannelType, CredentialMode, RechargeMultiplierMode } from "@/lib/api-types"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { useCaptchaConfigs } from "@/lib/queries"
@@ -63,6 +63,8 @@ interface FormState {
   sub2api_access_token: string
 
   balance_threshold: string
+  recharge_multiplier: string
+  recharge_multiplier_mode: RechargeMultiplierMode
   monitor_enabled: boolean
   turnstile_enabled: boolean
   ignore_announcements: boolean
@@ -72,6 +74,7 @@ interface FormState {
 }
 
 function initialState(c?: Channel | null): FormState {
+  const rechargeMultiplierMode = c?.recharge_multiplier_mode === "multiply" ? "multiply" : "divide"
   return {
     name: c?.name ?? "",
     type: c?.type ?? "sub2api",
@@ -84,6 +87,8 @@ function initialState(c?: Channel | null): FormState {
     newapi_user_id: "",
     sub2api_access_token: "",
     balance_threshold: c?.balance_threshold != null ? String(c.balance_threshold) : "0",
+    recharge_multiplier: c?.recharge_multiplier != null ? String(c.recharge_multiplier) : "",
+    recharge_multiplier_mode: rechargeMultiplierMode,
     monitor_enabled: c?.monitor_enabled ?? true,
     turnstile_enabled: c?.turnstile_enabled ?? false,
     ignore_announcements: c?.ignore_announcements ?? false,
@@ -138,6 +143,14 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
       const threshold = Number(form.balance_threshold)
       if (!Number.isFinite(threshold) || threshold < 0) {
         throw new Error("余额阈值必须是非负数")
+      }
+      let rechargeMultiplier = 0
+      const rechargeMultiplierText = form.recharge_multiplier.trim()
+      if (rechargeMultiplierText) {
+        rechargeMultiplier = Number(rechargeMultiplierText)
+        if (!Number.isFinite(rechargeMultiplier) || rechargeMultiplier <= 0) {
+          throw new Error("充值倍率必须大于 0，或留空跟随上游")
+        }
       }
       const loginExtraParams = isTokenMode ? "" : form.login_extra_params.trim()
       if (loginExtraParams) {
@@ -200,6 +213,8 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
           credential_mode: form.credential_mode,
           login_extra_params: loginExtraParams,
           balance_threshold: threshold,
+          recharge_multiplier: rechargeMultiplier,
+          recharge_multiplier_mode: form.recharge_multiplier_mode,
           monitor_enabled: form.monitor_enabled,
           turnstile_enabled: !isTokenMode && form.turnstile_enabled,
           ignore_announcements: form.ignore_announcements,
@@ -226,6 +241,8 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
             password: isTokenMode ? "" : form.password,
             token_credential: isTokenMode ? tokenCredential : "",
             balance_threshold: threshold,
+            recharge_multiplier: rechargeMultiplier,
+            recharge_multiplier_mode: form.recharge_multiplier_mode,
             monitor_enabled: form.monitor_enabled,
             turnstile_enabled: !isTokenMode && form.turnstile_enabled,
             ignore_announcements: form.ignore_announcements,
@@ -478,6 +495,39 @@ export function ChannelFormDialog({ open, onOpenChange, channel }: ChannelFormDi
               onChange={(e) => setForm({ ...form, balance_threshold: e.target.value })}
               disabled={submitting}
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="recharge-multiplier">充值倍率（留空 = 跟随上游）</Label>
+              <Input
+                id="recharge-multiplier"
+                type="number"
+                step="0.0001"
+                min="0"
+                value={form.recharge_multiplier}
+                onChange={(e) => setForm({ ...form, recharge_multiplier: e.target.value })}
+                disabled={submitting}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="recharge-multiplier-mode">换算方式</Label>
+              <Select
+                value={form.recharge_multiplier_mode}
+                onValueChange={(v) =>
+                  setForm({ ...form, recharge_multiplier_mode: v as RechargeMultiplierMode })
+                }
+                disabled={submitting}
+              >
+                <SelectTrigger id="recharge-multiplier-mode" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="divide">余额 / 倍率</SelectItem>
+                  <SelectItem value="multiply">余额 × 倍率</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">

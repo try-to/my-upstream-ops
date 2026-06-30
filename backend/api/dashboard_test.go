@@ -718,7 +718,7 @@ func findFirstJSONBody(s string) string {
 	return ""
 }
 
-func TestDeleteChannelKeepsAnnouncements(t *testing.T) {
+func TestDeleteChannelCleansHistories(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	db := openTestDB(t)
@@ -726,6 +726,7 @@ func TestDeleteChannelKeepsAnnouncements(t *testing.T) {
 	authSessions := storage.NewAuthSessions(db)
 	captchas := storage.NewCaptchas(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
+	notifies := storage.NewNotifications(db)
 	rates := storage.NewRates(db)
 	monLogs := storage.NewMonitorLogs(db)
 	cipher, err := crypto.NewCipher("test-secret")
@@ -753,6 +754,16 @@ func TestDeleteChannelKeepsAnnouncements(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("sync announcements: %v", err)
 	}
+	if err := notifies.AppendLog(&storage.NotificationLog{
+		ChannelID:         99,
+		UpstreamChannelID: 1,
+		Event:             storage.EventBalanceLow,
+		Subject:           "a 余额低于阈值",
+		Success:           true,
+		SentAt:            time.Now(),
+	}); err != nil {
+		t.Fatalf("append log: %v", err)
+	}
 
 	r := gin.New()
 	api := r.Group("/api")
@@ -768,8 +779,15 @@ func TestDeleteChannelKeepsAnnouncements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list announcements: %v", err)
 	}
-	if total != 1 || len(list) != 1 {
-		t.Fatalf("announcements should be kept: total=%d list=%#v", total, list)
+	if total != 0 || len(list) != 0 {
+		t.Fatalf("announcements should be deleted: total=%d list=%#v", total, list)
+	}
+	logs, total, err := notifies.ListLogsPage(1, 10)
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
+	}
+	if total != 0 || len(logs) != 0 {
+		t.Fatalf("notification logs should be deleted: total=%d list=%#v", total, logs)
 	}
 }
 

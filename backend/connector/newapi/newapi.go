@@ -151,6 +151,7 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 	}
 	var status struct {
 		QuotaPerUnit float64 `json:"quota_per_unit"`
+		Price        float64 `json:"price"`
 	}
 	if err := json.Unmarshal(statusBody, &status); err != nil {
 		return nil, fmt.Errorf("newapi status decode: %w", err)
@@ -169,8 +170,10 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 	if err := json.Unmarshal(selfBody, &self); err != nil {
 		return nil, fmt.Errorf("newapi self decode: %w", err)
 	}
+	balance := c.quotaToUSD(self.Quota, status.QuotaPerUnit)
+	multiplier := newAPIRechargeMultiplier(ch, status.Price)
 	return &connector.BalanceResult{
-		Balance:   c.quotaToUSD(self.Quota, status.QuotaPerUnit),
+		Balance:   connector.ApplyRechargeMultiplier(balance, multiplier, ch.RechargeMultiplierMode),
 		SampledAt: time.Now(),
 	}, nil
 }
@@ -183,6 +186,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	}
 	var status struct {
 		QuotaPerUnit float64 `json:"quota_per_unit"`
+		Price        float64 `json:"price"`
 	}
 	if err := json.Unmarshal(statusBody, &status); err != nil {
 		return nil, fmt.Errorf("newapi status decode: %w", err)
@@ -216,9 +220,12 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 		return nil, fmt.Errorf("newapi self total decode: %w", err)
 	}
 
+	todayCost := c.quotaToUSD(todayStat.Quota, status.QuotaPerUnit)
+	totalCost := c.quotaToUSD(usage.UsedQuota, status.QuotaPerUnit)
+	multiplier := newAPIRechargeMultiplier(ch, status.Price)
 	return &connector.CostResult{
-		TodayCost: c.quotaToUSD(todayStat.Quota, status.QuotaPerUnit),
-		TotalCost: c.quotaToUSD(usage.UsedQuota, status.QuotaPerUnit),
+		TodayCost: connector.ApplyRechargeMultiplier(todayCost, multiplier, ch.RechargeMultiplierMode),
+		TotalCost: connector.ApplyRechargeMultiplier(totalCost, multiplier, ch.RechargeMultiplierMode),
 	}, nil
 }
 
@@ -314,6 +321,7 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 	}
 	var status struct {
 		QuotaPerUnit float64 `json:"quota_per_unit"`
+		Price        float64 `json:"price"`
 	}
 	if err := json.Unmarshal(statusBody, &status); err != nil {
 		return nil, fmt.Errorf("newapi status decode: %w", err)
@@ -347,10 +355,12 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 	if err := json.Unmarshal(wrapped.Data, &quota); err != nil {
 		return nil, fmt.Errorf("newapi redeem data: %w", err)
 	}
+	value := quota / status.QuotaPerUnit
+	multiplier := newAPIRechargeMultiplier(ch, status.Price)
 	return &connector.RedeemResult{
 		Message: "兑换成功",
 		Type:    "balance",
-		Value:   quota / status.QuotaPerUnit,
+		Value:   connector.ApplyRechargeMultiplier(value, multiplier, ch.RechargeMultiplierMode),
 	}, nil
 }
 
@@ -874,6 +884,17 @@ func (c *Client) getRaw(ctx context.Context, url string, session *connector.Auth
 
 func (c *Client) quotaToUSD(quota float64, quotaPerUnit float64) float64 {
 	return round4(quota / quotaPerUnit)
+}
+
+func newAPIRechargeMultiplier(ch *connector.Channel, price float64) *float64 {
+	if ch.RechargeMultiplier != nil && *ch.RechargeMultiplier > 0 {
+		return ch.RechargeMultiplier
+	}
+	if price <= 0 {
+		return nil
+	}
+	multiplier := 1 / price
+	return &multiplier
 }
 
 func round4(v float64) float64 {

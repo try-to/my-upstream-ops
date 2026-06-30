@@ -151,8 +151,9 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 	if err := json.Unmarshal(body, &me); err != nil {
 		return nil, fmt.Errorf("sub2api me decode: %w", err)
 	}
+	multiplier := c.rechargeMultiplier(ctx, ch, session)
 	return &connector.BalanceResult{
-		Balance:   me.Balance,
+		Balance:   connector.ApplyRechargeMultiplier(me.Balance, multiplier, ch.RechargeMultiplierMode),
 		SampledAt: time.Now(),
 	}, nil
 }
@@ -169,10 +170,28 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	if err := json.Unmarshal(body, &stats); err != nil {
 		return nil, fmt.Errorf("sub2api dashboard stats decode: %w", err)
 	}
+	multiplier := c.rechargeMultiplier(ctx, ch, session)
 	return &connector.CostResult{
-		TodayCost: stats.TodayActualCost,
-		TotalCost: stats.TotalActualCost,
+		TodayCost: connector.ApplyRechargeMultiplier(stats.TodayActualCost, multiplier, ch.RechargeMultiplierMode),
+		TotalCost: connector.ApplyRechargeMultiplier(stats.TotalActualCost, multiplier, ch.RechargeMultiplierMode),
 	}, nil
+}
+
+func (c *Client) rechargeMultiplier(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) *float64 {
+	if ch.RechargeMultiplier != nil && *ch.RechargeMultiplier > 0 {
+		return ch.RechargeMultiplier
+	}
+	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/v1/payment/checkout-info", session)
+	if err != nil {
+		return nil
+	}
+	var raw struct {
+		BalanceRechargeMultiplier float64 `json:"balance_recharge_multiplier"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.BalanceRechargeMultiplier <= 0 {
+		return nil
+	}
+	return &raw.BalanceRechargeMultiplier
 }
 
 func (c *Client) GetRates(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) ([]connector.RateResult, error) {
@@ -315,6 +334,14 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 	}
 	if res.Message == "" {
 		res.Message = "兑换成功"
+	}
+	if res.Type == "balance" {
+		multiplier := c.rechargeMultiplier(ctx, ch, session)
+		res.Value = connector.ApplyRechargeMultiplier(res.Value, multiplier, ch.RechargeMultiplierMode)
+		if res.NewBalance != nil {
+			balance := connector.ApplyRechargeMultiplier(*res.NewBalance, multiplier, ch.RechargeMultiplierMode)
+			res.NewBalance = &balance
+		}
 	}
 	return res, nil
 }

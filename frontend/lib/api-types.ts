@@ -7,6 +7,8 @@ export type ChannelType = "newapi" | "sub2api"
 
 export type CredentialMode = "password" | "token"
 
+export type RechargeMultiplierMode = "divide" | "multiply"
+
 export type NotificationChannelType =
   | "telegram"
   | "webhook"
@@ -53,6 +55,8 @@ export interface Channel {
   proxy_enabled: boolean
   captcha_config_id?: number | null
   balance_threshold: number
+  recharge_multiplier?: number | null
+  recharge_multiplier_mode: RechargeMultiplierMode
   monitor_enabled: boolean
   last_balance?: number | null
   last_balance_at?: string | null
@@ -145,6 +149,7 @@ export interface NotificationChannel {
 export interface NotificationLog {
   id: number
   channel_id: number
+  upstream_channel_id?: number
   channel_name?: string
   channel_type?: string
   event: NotificationEvent

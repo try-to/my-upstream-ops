@@ -63,14 +63,15 @@ func registerNotifications(g *gin.RouterGroup, d *Deps) {
 		for _, item := range list {
 			meta := channelMeta[item.ChannelID]
 			row := gin.H{
-				"id":            item.ID,
-				"channel_id":    item.ChannelID,
-				"event":         item.Event,
-				"subject":       item.Subject,
-				"body":          item.Body,
-				"success":       item.Success,
-				"error_message": item.ErrorMessage,
-				"sent_at":       item.SentAt,
+				"id":                  item.ID,
+				"channel_id":          item.ChannelID,
+				"upstream_channel_id": item.UpstreamChannelID,
+				"event":               item.Event,
+				"subject":             item.Subject,
+				"body":                item.Body,
+				"success":             item.Success,
+				"error_message":       item.ErrorMessage,
+				"sent_at":             item.SentAt,
 			}
 			for k, v := range meta {
 				row[k] = v

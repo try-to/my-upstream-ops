@@ -34,21 +34,23 @@ const (
 //
 // 复用 PasswordCipher 而不新增 TokenCipher 是为了让现有的 GORM 行 / 加密路径 / 迁移流程零变动。
 type Channel struct {
-	ID                  uint           `gorm:"primaryKey" json:"id"`
-	Name                string         `gorm:"size:128;not null;uniqueIndex" json:"name"`
-	Type                ChannelType    `gorm:"size:32;not null;index" json:"type"`
-	SiteURL             string         `gorm:"size:512;not null" json:"site_url"`
-	Username            string         `gorm:"size:256;not null" json:"username"`
-	PasswordCipher      string         `gorm:"size:4096;not null" json:"-"`
-	CredentialMode      CredentialMode `gorm:"size:16;not null;default:'password'" json:"credential_mode"`
-	LoginExtraParams    string         `gorm:"type:text" json:"login_extra_params"`
-	TurnstileEnabled    bool           `gorm:"default:false" json:"turnstile_enabled"`
-	IgnoreAnnouncements bool           `gorm:"default:false" json:"ignore_announcements"`
-	SubscriptionEnabled bool           `gorm:"default:false" json:"subscription_enabled"`
-	ProxyEnabled        bool           `gorm:"default:false" json:"proxy_enabled"`
-	CaptchaConfigID     *uint          `json:"captcha_config_id,omitempty"`
-	BalanceThreshold    float64        `gorm:"default:0" json:"balance_threshold"`
-	MonitorEnabled      bool           `gorm:"default:true" json:"monitor_enabled"`
+	ID                     uint           `gorm:"primaryKey" json:"id"`
+	Name                   string         `gorm:"size:128;not null;uniqueIndex" json:"name"`
+	Type                   ChannelType    `gorm:"size:32;not null;index" json:"type"`
+	SiteURL                string         `gorm:"size:512;not null" json:"site_url"`
+	Username               string         `gorm:"size:256;not null" json:"username"`
+	PasswordCipher         string         `gorm:"size:4096;not null" json:"-"`
+	CredentialMode         CredentialMode `gorm:"size:16;not null;default:'password'" json:"credential_mode"`
+	LoginExtraParams       string         `gorm:"type:text" json:"login_extra_params"`
+	TurnstileEnabled       bool           `gorm:"default:false" json:"turnstile_enabled"`
+	IgnoreAnnouncements    bool           `gorm:"default:false" json:"ignore_announcements"`
+	SubscriptionEnabled    bool           `gorm:"default:false" json:"subscription_enabled"`
+	ProxyEnabled           bool           `gorm:"default:false" json:"proxy_enabled"`
+	CaptchaConfigID        *uint          `json:"captcha_config_id,omitempty"`
+	BalanceThreshold       float64        `gorm:"default:0" json:"balance_threshold"`
+	RechargeMultiplier     *float64       `json:"recharge_multiplier,omitempty"`
+	RechargeMultiplierMode string         `gorm:"size:16;not null;default:'divide'" json:"recharge_multiplier_mode"`
+	MonitorEnabled         bool           `gorm:"default:true" json:"monitor_enabled"`
 
 	// 最近一次采集结果（聚合视图，便于列表页直接展示）
 	LastBalance   *float64   `json:"last_balance,omitempty"`
@@ -228,14 +230,15 @@ const (
 
 // NotificationLog 通知发送记录。
 type NotificationLog struct {
-	ID           uint              `gorm:"primaryKey" json:"id"`
-	ChannelID    uint              `gorm:"not null;index" json:"channel_id"`
-	Event        NotificationEvent `gorm:"size:64;not null;index" json:"event"`
-	Subject      string            `gorm:"size:512;not null" json:"subject"`
-	Body         string            `gorm:"type:text" json:"body"`
-	Success      bool              `gorm:"not null" json:"success"`
-	ErrorMessage string            `gorm:"type:text" json:"error_message,omitempty"`
-	SentAt       time.Time         `gorm:"not null;index" json:"sent_at"`
+	ID                uint              `gorm:"primaryKey" json:"id"`
+	ChannelID         uint              `gorm:"not null;index" json:"channel_id"`
+	UpstreamChannelID uint              `gorm:"not null;default:0;index" json:"upstream_channel_id,omitempty"`
+	Event             NotificationEvent `gorm:"size:64;not null;index" json:"event"`
+	Subject           string            `gorm:"size:512;not null" json:"subject"`
+	Body              string            `gorm:"type:text" json:"body"`
+	Success           bool              `gorm:"not null" json:"success"`
+	ErrorMessage      string            `gorm:"type:text" json:"error_message,omitempty"`
+	SentAt            time.Time         `gorm:"not null;index" json:"sent_at"`
 }
 
 func (NotificationLog) TableName() string { return "notification_logs" }

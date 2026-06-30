@@ -401,11 +401,12 @@ func backoffDelay(attempt int) time.Duration {
 
 func (d *Dispatcher) logResult(channelID uint, msg Message, sendErr error) {
 	log := &storage.NotificationLog{
-		ChannelID: channelID,
-		Event:     msg.Event,
-		Subject:   msg.Subject,
-		Body:      msg.Body,
-		Success:   sendErr == nil,
+		ChannelID:         channelID,
+		UpstreamChannelID: msg.ChannelID,
+		Event:             msg.Event,
+		Subject:           msg.Subject,
+		Body:              msg.Body,
+		Success:           sendErr == nil,
 	}
 	if sendErr != nil {
 		log.ErrorMessage = sendErr.Error()

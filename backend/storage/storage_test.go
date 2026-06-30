@@ -724,7 +724,13 @@ func TestDeleteChannelCleansScopedState(t *testing.T) {
 	if err := db.Create(&NotificationCooldown{ChannelID: ch.ID, Event: EventBalanceLow, LastSentAt: now}).Error; err != nil {
 		t.Fatalf("create cooldown: %v", err)
 	}
-	if err := db.Create(&UpstreamAnnouncement{ChannelID: ch.ID, SourceKey: "a", Content: "kept", FirstSeenAt: now}).Error; err != nil {
+	if err := db.Create(&NotificationLog{ChannelID: 99, UpstreamChannelID: ch.ID, Event: EventBalanceLow, Subject: "alert", Success: true, SentAt: now}).Error; err != nil {
+		t.Fatalf("create notification log: %v", err)
+	}
+	if err := db.Create(&NotificationLog{ChannelID: 99, Event: EventBalanceLow, Subject: "demo 余额低于阈值", Success: true, SentAt: now}).Error; err != nil {
+		t.Fatalf("create legacy notification log: %v", err)
+	}
+	if err := db.Create(&UpstreamAnnouncement{ChannelID: ch.ID, SourceKey: "a", Content: "deleted", FirstSeenAt: now}).Error; err != nil {
 		t.Fatalf("create announcement: %v", err)
 	}
 
@@ -743,22 +749,20 @@ func TestDeleteChannelCleansScopedState(t *testing.T) {
 		{"cost_snapshots", &CostSnapshot{}},
 		{"monitor_logs", &MonitorLog{}},
 		{"notification_cooldowns", &NotificationCooldown{}},
+		{"upstream_announcements", &UpstreamAnnouncement{}},
+		{"notification_logs", &NotificationLog{}},
 	} {
 		var count int64
-		if err := db.Model(tt.model).Where("channel_id = ?", ch.ID).Count(&count).Error; err != nil {
+		q := db.Model(tt.model).Where("channel_id = ?", ch.ID)
+		if tt.name == "notification_logs" {
+			q = db.Model(tt.model).Where("upstream_channel_id = ? OR subject LIKE ?", ch.ID, "%"+ch.Name+"%")
+		}
+		if err := q.Count(&count).Error; err != nil {
 			t.Fatalf("count %s: %v", tt.name, err)
 		}
 		if count != 0 {
 			t.Fatalf("%s count = %d, want 0", tt.name, count)
 		}
-	}
-
-	var announcements int64
-	if err := db.Model(&UpstreamAnnouncement{}).Where("channel_id = ?", ch.ID).Count(&announcements).Error; err != nil {
-		t.Fatalf("count announcements: %v", err)
-	}
-	if announcements != 1 {
-		t.Fatalf("announcements count = %d, want 1", announcements)
 	}
 }
 

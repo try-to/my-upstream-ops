@@ -12,6 +12,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,17 +28,47 @@ const (
 
 // Channel 已解密的渠道连接信息，由 channel 层负责构造。
 type Channel struct {
-	ID               uint
-	Name             string
-	Type             ChannelType
-	SiteURL          string
-	Username         string
-	Password         string
-	LoginExtraParams map[string]any
-	TurnstileEnabled bool
-	ProxyURL         string
+	ID                     uint
+	Name                   string
+	Type                   ChannelType
+	SiteURL                string
+	Username               string
+	Password               string
+	LoginExtraParams       map[string]any
+	TurnstileEnabled       bool
+	ProxyURL               string
+	RechargeMultiplier     *float64
+	RechargeMultiplierMode string
 	// TurnstileToken 由调用方在 Login 前预先求解打码后填入；为空则直接发起登录。
 	TurnstileToken string
+}
+
+const (
+	RechargeMultiplierModeDivide   = "divide"
+	RechargeMultiplierModeMultiply = "multiply"
+)
+
+func NormalizeRechargeMultiplierMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case RechargeMultiplierModeMultiply:
+		return RechargeMultiplierModeMultiply
+	default:
+		return RechargeMultiplierModeDivide
+	}
+}
+
+func ApplyRechargeMultiplier(value float64, multiplier *float64, mode string) float64 {
+	if multiplier == nil || *multiplier <= 0 {
+		return value
+	}
+	if NormalizeRechargeMultiplierMode(mode) == RechargeMultiplierModeMultiply {
+		return round4(value * *multiplier)
+	}
+	return round4(value / *multiplier)
+}
+
+func round4(value float64) float64 {
+	return math.Round(value*10000) / 10000
 }
 
 // AuthSession 登录后产生的会话凭据。明文，由 channel 层负责加密落库。

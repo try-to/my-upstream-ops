@@ -63,6 +63,7 @@ UpstreamOps focuses on these problems:
 - Supports extra login form parameters for modified NewAPI or Sub2API login endpoints.
 - Supports Cloudflare Turnstile solving for upstream login flows.
 - Opens upstream site URLs directly from channel cards.
+- Deleting a channel cleans related snapshots, rates, announcements, notification cooldowns, and notification logs.
 
 ### Balance and Spending Monitoring
 
@@ -71,6 +72,7 @@ UpstreamOps focuses on these problems:
 - Displays balance history trends.
 - Pushes notifications when balance falls below the configured threshold.
 - Supports cooldown for repeated low-balance alerts.
+- Supports recharge multiplier conversion for balance, spending, and redeem values, using either the upstream multiplier or a manual divide/multiply mode.
 
 ### Rate Monitoring
 
@@ -259,7 +261,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.0.1
+IMAGE_TAG=v0.0.2
 ```
 
 ## MySQL Deployment
@@ -580,6 +582,8 @@ Notification logs:
 ```text
 GET /api/notifications/logs?page=1&page_size=20
 ```
+
+Notification log rows include the upstream channel ID when the event is tied to a specific upstream channel.
 
 Rate change logs:
 
