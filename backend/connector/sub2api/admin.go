@@ -27,14 +27,22 @@ type AdminTarget struct {
 }
 
 type AdminGroup struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	Platform       string  `json:"platform"`
-	Ratio          float64 `json:"ratio"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	Status         string  `json:"status"`
-	Sort           int     `json:"sort"`
-	Description    string  `json:"description"`
+	ID                  int64              `json:"id"`
+	Name                string             `json:"name"`
+	Platform            string             `json:"platform"`
+	Ratio               float64            `json:"ratio"`
+	RateMultiplier      float64            `json:"rate_multiplier"`
+	Status              string             `json:"status"`
+	Sort                int                `json:"sort"`
+	SortOrder           int                `json:"sort_order"`
+	Description         string             `json:"description"`
+	ModelRouting        map[string][]int64 `json:"model_routing"`
+	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
+}
+
+type AdminGroupRoutingUpdate struct {
+	ModelRouting        map[string][]int64 `json:"model_routing"`
+	ModelRoutingEnabled bool               `json:"model_routing_enabled"`
 }
 
 type AdminProxy struct {
@@ -48,20 +56,25 @@ type AdminProxy struct {
 }
 
 type AdminAccount struct {
-	ID             int64          `json:"id"`
-	Name           string         `json:"name"`
-	Platform       string         `json:"platform"`
-	Type           string         `json:"type"`
-	Status         string         `json:"status"`
-	Schedulable    bool           `json:"schedulable,omitempty"`
-	Notes          string         `json:"notes"`
-	ProxyID        *int64         `json:"proxy_id,omitempty"`
-	Concurrency    int            `json:"concurrency"`
-	Priority       int            `json:"priority"`
-	RateMultiplier float64        `json:"rate_multiplier"`
-	LoadFactor     float64        `json:"load_factor"`
-	GroupIDs       []int64        `json:"group_ids"`
-	Credentials    map[string]any `json:"credentials"`
+	ID                     int64          `json:"id"`
+	Name                   string         `json:"name"`
+	Platform               string         `json:"platform"`
+	Type                   string         `json:"type"`
+	Status                 string         `json:"status"`
+	Schedulable            bool           `json:"schedulable,omitempty"`
+	Notes                  string         `json:"notes"`
+	ProxyID                *int64         `json:"proxy_id,omitempty"`
+	Concurrency            int            `json:"concurrency"`
+	Priority               int            `json:"priority"`
+	RateMultiplier         float64        `json:"rate_multiplier"`
+	LoadFactor             float64        `json:"load_factor"`
+	GroupIDs               []int64        `json:"group_ids"`
+	Credentials            map[string]any `json:"credentials"`
+	ExpiresAt              *int64         `json:"expires_at,omitempty"`
+	AutoPauseOnExpired     bool           `json:"auto_pause_on_expired,omitempty"`
+	RateLimitResetAt       string         `json:"rate_limit_reset_at,omitempty"`
+	OverloadUntil          string         `json:"overload_until,omitempty"`
+	TempUnschedulableUntil string         `json:"temp_unschedulable_until,omitempty"`
 }
 
 type AdminAccountPage struct {
@@ -105,6 +118,26 @@ func (a *AdminClient) ListGroups(ctx context.Context, t AdminTarget, includeInac
 	}
 	normalizeAdminGroupRatios(wrapped.Items)
 	return wrapped.Items, nil
+}
+
+func (a *AdminClient) UpdateGroupRouting(ctx context.Context, t AdminTarget, id int64, req AdminGroupRoutingUpdate) (*AdminGroup, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.client.http.R().
+		SetContext(ctx).
+		SetHeader("Content-Type", "application/json").
+		SetHeader("x-api-key", t.APIKey).
+		SetBody(body).
+		Put(strings.TrimRight(t.BaseURL, "/") + "/api/v1/admin/groups/" + strconv.FormatInt(id, 10))
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsError() {
+		return nil, fmt.Errorf("update admin group routing: %w", connector.HTTPStatusError(resp.StatusCode(), resp.Body()))
+	}
+	return decodeAdminGroup(resp.Body())
 }
 
 func (a *AdminClient) ListProxies(ctx context.Context, t AdminTarget) ([]AdminProxy, error) {
@@ -505,6 +538,29 @@ func decodeAdminAccount(body []byte) (*AdminAccount, error) {
 		return &out, nil
 	}
 	var out AdminAccount
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func decodeAdminGroup(body []byte) (*AdminGroup, error) {
+	var wrapped struct {
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Data != nil {
+		if wrapped.Code != 0 {
+			return nil, errors.New(strings.TrimSpace(wrapped.Message))
+		}
+		var out AdminGroup
+		if err := json.Unmarshal(wrapped.Data, &out); err != nil {
+			return nil, err
+		}
+		return &out, nil
+	}
+	var out AdminGroup
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}

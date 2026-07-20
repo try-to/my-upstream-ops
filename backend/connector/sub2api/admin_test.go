@@ -147,7 +147,24 @@ func TestAdminClientUsesAPIKeyAndDecodesAccountWrites(t *testing.T) {
 		if r.Header.Get("x-api-key") != "admin-key" {
 			t.Fatalf("x-api-key = %q", r.Header.Get("x-api-key"))
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{}})
+		switch r.Method {
+		case http.MethodPut:
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode group routing body: %v", err)
+			}
+			if len(body) != 2 || body["model_routing"] == nil || body["model_routing_enabled"] == nil {
+				t.Fatalf("group routing body fields = %v", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{
+				"id": 1, "name": "g1", "model_routing_enabled": true,
+				"model_routing": map[string][]int64{"*": {8}, "__weights_primary__": {55}},
+			}})
+		case http.MethodDelete:
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{}})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -193,6 +210,16 @@ func TestAdminClientUsesAPIKeyAndDecodesAccountWrites(t *testing.T) {
 	}
 	if account.ID != 8 || account.Schedulable {
 		t.Fatalf("schedulable account = %#v", account)
+	}
+	group, err := client.UpdateGroupRouting(context.Background(), target, 1, AdminGroupRoutingUpdate{
+		ModelRoutingEnabled: true,
+		ModelRouting:        map[string][]int64{"*": {8}, "__weights_primary__": {55}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateGroupRouting: %v", err)
+	}
+	if group.ID != 1 || !group.ModelRoutingEnabled || group.ModelRouting["__weights_primary__"][0] != 55 {
+		t.Fatalf("updated group = %#v", group)
 	}
 	models, err := client.SyncAccountModelsFromUpstream(context.Background(), target, 8)
 	if err != nil {

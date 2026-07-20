@@ -225,35 +225,30 @@ export interface Sub2APIOverviewTarget {
 }
 
 export interface Sub2APIOverviewSummary {
-  total_accounts: number
-  active_accounts: number
-  schedulable_accounts: number
-  managed_accounts: number
-  unmanaged_accounts: number
+  total_groups: number
+  smart_dispatch_groups: number
+  real_upstream_accounts: number
+  virtual_pools: number
+  virtual_pool_members: number
 }
 
-export interface Sub2APIOverviewAccountGroup {
+export interface Sub2APIOverviewPoolEntry {
   id: number
   name: string
+  kind: "account" | "virtual"
+  weight: number
+  available: boolean
+  member_count?: number
   platform?: string
-}
-
-export interface Sub2APIOverviewAccount {
-  id: number
-  name: string
-  platform: string
-  type: string
-  status: string
-  schedulable: boolean
-  concurrency: number
-  priority: number
-  rate_multiplier: number
-  load_factor: number
-  proxy_id?: number | null
+  type?: string
+  status?: string
+  schedulable?: boolean
+  concurrency?: number
+  priority?: number
+  rate_multiplier?: number
   proxy_name?: string
-  groups: Sub2APIOverviewAccountGroup[]
-  managed: boolean
-  managed_sync_group_names?: string[] | null
+  managed?: boolean
+  managed_sync_group_names?: string[]
 }
 
 export interface Sub2APIOverviewGroup {
@@ -263,21 +258,32 @@ export interface Sub2APIOverviewGroup {
   ratio: number
   status: string
   sort: number
-  account_count: number
-  active_account_count: number
-  schedulable_account_count: number
+  smart_dispatch_enabled: boolean
+  primary_pool: Sub2APIOverviewPoolEntry[]
+  fallback_pool: Sub2APIOverviewPoolEntry[]
 }
 
 export interface Sub2APIOverview {
   target: Sub2APIOverviewTarget
   summary: Sub2APIOverviewSummary
   groups: Sub2APIOverviewGroup[]
-  accounts: Sub2APIOverviewAccount[]
 }
 
 export interface Sub2APISchedulableUpdate {
   account_id: number
   schedulable: boolean
+}
+
+export interface Sub2APISmartRoutingEntry {
+  id: number
+  weight: number
+}
+
+export interface Sub2APISmartRoutingUpdate {
+  group_id: number
+  smart_dispatch_enabled: boolean
+  primary_pool: Sub2APISmartRoutingEntry[]
+  fallback_pool: Sub2APISmartRoutingEntry[]
 }
 
 export interface BalanceTrendPoint {

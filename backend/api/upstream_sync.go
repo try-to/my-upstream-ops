@@ -24,6 +24,7 @@ func registerUpstreamSync(g *gin.RouterGroup, d *Deps) {
 	gp.GET("/targets/:id/proxies", func(c *gin.Context) { listUpstreamSyncTargetProxies(c, d) })
 	gp.GET("/overview", func(c *gin.Context) { getUpstreamSyncOverview(c, d) })
 	gp.PUT("/accounts/:account_id/schedulable", func(c *gin.Context) { updateUpstreamSyncAccountSchedulable(c, d) })
+	gp.PUT("/groups/:group_id/smart-routing", func(c *gin.Context) { updateUpstreamSyncGroupSmartRouting(c, d) })
 	gp.GET("/source-models", func(c *gin.Context) { listUpstreamSyncSourceModels(c, d) })
 	gp.GET("/sync-groups", func(c *gin.Context) { listUpstreamSyncGroups(c, d) })
 	gp.POST("/sync-groups", func(c *gin.Context) { createUpstreamSyncGroup(c, d) })
@@ -32,6 +33,40 @@ func registerUpstreamSync(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/sync-groups/:id/apply", func(c *gin.Context) { applyUpstreamSyncGroup(c, d) })
 	gp.POST("/sync-groups/:id/delete-managed", func(c *gin.Context) { deleteUpstreamSyncManaged(c, d) })
 	gp.GET("/sync-groups/:id/logs", func(c *gin.Context) { listUpstreamSyncGroupLogs(c, d) })
+}
+
+func updateUpstreamSyncGroupSmartRouting(c *gin.Context, d *Deps) {
+	groupID, err := strconv.ParseInt(c.Param("group_id"), 10, 64)
+	if err != nil || groupID <= 0 {
+		if err == nil {
+			err = errors.New("group_id must be greater than 0")
+		}
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	var raw struct {
+		PrimaryPool  *[]syncer.SmartRoutingEntryInput `json:"primary_pool"`
+		FallbackPool *[]syncer.SmartRoutingEntryInput `json:"fallback_pool"`
+	}
+	if err := c.ShouldBindJSON(&raw); err != nil || raw.PrimaryPool == nil || raw.FallbackPool == nil {
+		if err == nil {
+			err = errors.New("primary_pool and fallback_pool are required")
+		}
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	item, err := d.UpstreamSync.UpdateOverviewGroupSmartRouting(c.Request.Context(), groupID, syncer.SmartRoutingUpdateInput{
+		PrimaryPool: *raw.PrimaryPool, FallbackPool: *raw.FallbackPool,
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, syncer.ErrInvalidOverviewRouting) {
+			status = http.StatusBadRequest
+		}
+		fail(c, status, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": item})
 }
 
 func getUpstreamSyncOverview(c *gin.Context, d *Deps) {

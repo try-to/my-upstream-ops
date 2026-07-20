@@ -2,57 +2,46 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertCircle,
-  CheckCircle2,
+  Boxes,
   CircleGauge,
-  Link2,
+  Database,
+  LoaderCircle,
   RefreshCw,
   RotateCcw,
+  Save,
   Search,
   Server,
-  Users,
+  UsersRound,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { apiFetch, type ApiError } from "@/lib/api"
 import type {
   Sub2APIOverview,
-  Sub2APIOverviewAccount,
   Sub2APIOverviewGroup,
+  Sub2APIOverviewPoolEntry,
   Sub2APISchedulableUpdate,
+  Sub2APISmartRoutingEntry,
+  Sub2APISmartRoutingUpdate,
 } from "@/lib/api-types"
 import { cn } from "@/lib/utils"
 
 const ALL = "all"
+
+interface GroupWeightDraft {
+  primary: string[]
+  fallback: string[]
+}
 
 export default function Sub2APIOverviewPage() {
   const navigate = useNavigate()
@@ -62,12 +51,12 @@ export default function Sub2APIOverviewPage() {
   const [error, setError] = useState("")
   const [errorStatus, setErrorStatus] = useState<number | null>(null)
   const [busyAccounts, setBusyAccounts] = useState<Set<number>>(new Set())
+  const [busyGroups, setBusyGroups] = useState<Set<number>>(new Set())
+  const [weightDrafts, setWeightDrafts] = useState<Record<number, GroupWeightDraft>>({})
+  const [activeGroup, setActiveGroup] = useState("")
   const [search, setSearch] = useState("")
   const [platform, setPlatform] = useState(ALL)
-  const [group, setGroup] = useState(ALL)
-  const [status, setStatus] = useState(ALL)
-  const [schedulable, setSchedulable] = useState(ALL)
-  const [managed, setManaged] = useState(ALL)
+  const [dispatch, setDispatch] = useState(ALL)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -81,6 +70,7 @@ export default function Sub2APIOverviewPage() {
     try {
       const result = await apiFetch<Sub2APIOverview>("/upstream-sync/overview", { signal })
       setData(result)
+      setWeightDrafts(createWeightDrafts(result.groups))
       setError("")
       setErrorStatus(null)
     } catch (err) {
@@ -96,75 +86,107 @@ export default function Sub2APIOverviewPage() {
     }
   }
 
-  async function updateSchedulable(account: Sub2APIOverviewAccount, next: boolean) {
-    setBusyAccounts((current) => new Set(current).add(account.id))
+  async function updateSchedulable(entry: Sub2APIOverviewPoolEntry, next: boolean) {
+    if (entry.kind !== "account" || entry.id <= 0) return
+    setBusyAccounts((current) => new Set(current).add(entry.id))
     try {
       const result = await apiFetch<Sub2APISchedulableUpdate>(
-        `/upstream-sync/accounts/${account.id}/schedulable`,
+        `/upstream-sync/accounts/${entry.id}/schedulable`,
         { method: "PUT", body: JSON.stringify({ schedulable: next }) },
       )
       setData((current) => current ? applySchedulableUpdate(current, result.account_id, result.schedulable) : current)
-      toast.success(result.schedulable ? "已启用账号调度" : "已禁用账号调度")
+      toast.success(result.schedulable ? "已启用真实上游调度" : "已禁用真实上游调度")
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "更新账号调度失败")
+      toast.error(err instanceof Error ? err.message : "更新真实上游调度失败")
     } finally {
-      setBusyAccounts((current) => {
-        const nextSet = new Set(current)
-        nextSet.delete(account.id)
-        return nextSet
-      })
+      setBusyAccounts((current) => removeFromSet(current, entry.id))
+    }
+  }
+
+  function updateWeight(groupID: number, pool: "primary" | "fallback", index: number, value: string) {
+    setWeightDrafts((current) => {
+      const group = data?.groups.find((item) => item.id === groupID)
+      const previous = current[groupID] ?? (group ? createGroupWeightDraft(group) : { primary: [], fallback: [] })
+      const values = [...previous[pool]]
+      values[index] = value
+      return { ...current, [groupID]: { ...previous, [pool]: values } }
+    })
+  }
+
+  async function saveWeights(group: Sub2APIOverviewGroup) {
+    const draft = weightDrafts[group.id] ?? createGroupWeightDraft(group)
+    const primaryPool = buildRoutingEntries(group.primary_pool, draft.primary)
+    const fallbackPool = buildRoutingEntries(group.fallback_pool, draft.fallback)
+    if (!primaryPool || !fallbackPool) {
+      toast.error("权重必须是 1-999 之间的整数")
+      return
+    }
+    setBusyGroups((current) => new Set(current).add(group.id))
+    try {
+      const result = await apiFetch<Sub2APISmartRoutingUpdate>(
+        `/upstream-sync/groups/${group.id}/smart-routing`,
+        { method: "PUT", body: JSON.stringify({ primary_pool: primaryPool, fallback_pool: fallbackPool }) },
+      )
+      setData((current) => current ? applySmartRoutingUpdate(current, result) : current)
+      setWeightDrafts((current) => ({
+        ...current,
+        [group.id]: {
+          primary: result.primary_pool.map((entry) => String(entry.weight)),
+          fallback: result.fallback_pool.map((entry) => String(entry.weight)),
+        },
+      }))
+      toast.success(`已保存“${group.name}”的调度权重`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "保存调度权重失败")
+    } finally {
+      setBusyGroups((current) => removeFromSet(current, group.id))
     }
   }
 
   const platforms = useMemo(
-    () => uniqueSorted(data?.accounts.map((account) => account.platform).filter(Boolean) ?? []),
+    () => uniqueSorted(data?.groups.map((group) => group.platform || "").filter(Boolean) ?? []),
     [data],
   )
-  const statuses = useMemo(
-    () => uniqueSorted(data?.accounts.map((account) => account.status).filter(Boolean) ?? []),
-    [data],
-  )
-  const filteredAccounts = useMemo(() => {
+  const filteredGroups = useMemo(() => {
     if (!data) return []
     const needle = search.trim().toLocaleLowerCase()
-    return data.accounts.filter((account) => {
-      if (needle && !`${account.name} ${account.id}`.toLocaleLowerCase().includes(needle)) return false
-      if (platform !== ALL && account.platform !== platform) return false
-      if (group !== ALL) {
-        if (group === "ungrouped" && account.groups.length > 0) return false
-        if (group !== "ungrouped" && !account.groups.some((item) => String(item.id) === group)) return false
-      }
-      if (status !== ALL && account.status !== status) return false
-      if (schedulable === "enabled" && !account.schedulable) return false
-      if (schedulable === "disabled" && account.schedulable) return false
-      if (managed === "managed" && !account.managed) return false
-      if (managed === "unmanaged" && account.managed) return false
-      return true
+    return data.groups.filter((group) => {
+      if (platform !== ALL && group.platform !== platform) return false
+      if (dispatch === "enabled" && !group.smart_dispatch_enabled) return false
+      if (dispatch === "disabled" && group.smart_dispatch_enabled) return false
+      if (!needle) return true
+      const poolNames = [...group.primary_pool, ...group.fallback_pool].map((entry) => entry.name).join(" ")
+      return `${group.name} ${group.id} ${poolNames}`.toLocaleLowerCase().includes(needle)
     })
-  }, [data, group, managed, platform, schedulable, search, status])
+  }, [data, dispatch, platform, search])
 
-  const filtersActive = Boolean(
-    search || platform !== ALL || group !== ALL || status !== ALL || schedulable !== ALL || managed !== ALL,
-  )
+  useEffect(() => {
+    if (filteredGroups.length === 0) {
+      if (activeGroup) setActiveGroup("")
+      return
+    }
+    if (!filteredGroups.some((group) => String(group.id) === activeGroup)) {
+      setActiveGroup(String(filteredGroups[0].id))
+    }
+  }, [activeGroup, filteredGroups])
+
+  const selectedGroup = filteredGroups.find((group) => String(group.id) === activeGroup)
+  const filtersActive = Boolean(search || platform !== ALL || dispatch !== ALL)
 
   function resetFilters() {
     setSearch("")
     setPlatform(ALL)
-    setGroup(ALL)
-    setStatus(ALL)
-    setSchedulable(ALL)
-    setManaged(ALL)
+    setDispatch(ALL)
   }
 
   if (loading && !data) return <OverviewSkeleton />
-
   if (!data) {
     const unconfigured = errorStatus === 409
     return (
       <Empty className="min-h-96 border">
         <EmptyHeader>
           <EmptyMedia variant="icon">{unconfigured ? <Server /> : <AlertCircle />}</EmptyMedia>
-          <EmptyTitle>{unconfigured ? "尚未配置唯一的 Sub2API 目标" : "无法加载 Sub2API 聚合数据"}</EmptyTitle>
+          <EmptyTitle>{unconfigured ? "尚未配置唯一的 Sub2API 目标" : "无法加载智能调度聚合"}</EmptyTitle>
           <EmptyDescription>{error}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
@@ -186,7 +208,7 @@ export default function Sub2APIOverviewPage() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-lg font-semibold text-foreground">Sub2API 聚合</h1>
+            <h1 className="text-lg font-semibold text-foreground">Sub2API 智能调度聚合</h1>
             <Badge variant="outline">{data.target.name}</Badge>
             {!data.target.enabled ? <Badge variant="destructive">目标已禁用</Badge> : null}
           </div>
@@ -194,13 +216,7 @@ export default function Sub2APIOverviewPage() {
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
-              aria-label="刷新聚合数据"
-              disabled={refreshing}
-              onClick={() => void loadOverview(true)}
-            >
+            <Button variant="outline" size="icon" aria-label="刷新聚合数据" disabled={refreshing} onClick={() => void loadOverview(true)}>
               <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
             </Button>
           </TooltipTrigger>
@@ -217,86 +233,228 @@ export default function Sub2APIOverviewPage() {
       ) : null}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        <MetricCard icon={<Users />} label="账号总数" value={data.summary.total_accounts} />
-        <MetricCard icon={<CheckCircle2 />} label="启用账号" value={data.summary.active_accounts} />
-        <MetricCard icon={<CircleGauge />} label="可调度" value={data.summary.schedulable_accounts} />
-        <MetricCard icon={<Link2 />} label="托管账号" value={data.summary.managed_accounts} />
-        <MetricCard icon={<Server />} label="非托管" value={data.summary.unmanaged_accounts} />
+        <MetricCard icon={<Boxes />} label="分组总数" value={data.summary.total_groups} />
+        <MetricCard icon={<CircleGauge />} label="已启用智能调度" value={data.summary.smart_dispatch_groups} />
+        <MetricCard icon={<Server />} label="真实上游账号" value={data.summary.real_upstream_accounts} />
+        <MetricCard icon={<Database />} label="虚拟池种类" value={data.summary.virtual_pools} />
+        <MetricCard icon={<UsersRound />} label="虚拟池授权数" value={data.summary.virtual_pool_members} />
       </div>
 
-      <section className="space-y-2">
-        <SectionHeading title="分组汇总" count={data.groups.length} />
-        <GroupSummary groups={data.groups} />
-      </section>
-
       <section className="space-y-3">
-        <SectionHeading title="账号" count={filteredAccounts.length} total={data.accounts.length} />
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.4fr)_repeat(5,minmax(130px,1fr))_36px]">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索账号名称或 ID"
-              className="pl-9"
-            />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-foreground">分组账号池</h2>
+            <Badge variant="secondary" className="font-mono">{filteredGroups.length}/{data.groups.length}</Badge>
           </div>
-          <FilterSelect value={platform} onChange={setPlatform} placeholder="全部平台" items={platforms} />
-          <FilterSelect
-            value={group}
-            onChange={setGroup}
-            placeholder="全部分组"
-            items={data.groups.map((item) => ({ value: item.id === 0 ? "ungrouped" : String(item.id), label: item.name }))}
-          />
-          <FilterSelect
-            value={status}
-            onChange={setStatus}
-            placeholder="全部状态"
-            items={statuses.map((item) => ({ value: item, label: statusLabel(item) }))}
-          />
-          <FilterSelect
-            value={schedulable}
-            onChange={setSchedulable}
-            placeholder="全部调度"
-            items={[{ value: "enabled", label: "可调度" }, { value: "disabled", label: "不可调度" }]}
-          />
-          <FilterSelect
-            value={managed}
-            onChange={setManaged}
-            placeholder="全部来源"
-            items={[{ value: "managed", label: "托管账号" }, { value: "unmanaged", label: "非托管账号" }]}
-          />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                aria-label="重置筛选"
-                disabled={!filtersActive}
-                onClick={resetFilters}
-              >
-                <RotateCcw className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>重置筛选</TooltipContent>
-          </Tooltip>
+          <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-[minmax(220px,280px)_150px_170px_36px]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索分组或账号池" className="pl-9" />
+            </div>
+            <FilterSelect value={platform} onChange={setPlatform} placeholder="全部平台" items={platforms} />
+            <FilterSelect value={dispatch} onChange={setDispatch} placeholder="全部调度状态" items={[{ value: "enabled", label: "已启用智能调度" }, { value: "disabled", label: "未启用智能调度" }]} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="重置筛选" disabled={!filtersActive} onClick={resetFilters}><RotateCcw className="size-4" /></Button>
+              </TooltipTrigger>
+              <TooltipContent>重置筛选</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
-        {filteredAccounts.length === 0 ? (
+        {filteredGroups.length === 0 ? (
           <Empty className="min-h-48 border">
             <EmptyHeader>
               <EmptyMedia variant="icon"><Search /></EmptyMedia>
-              <EmptyTitle>没有匹配的账号</EmptyTitle>
+              <EmptyTitle>没有匹配的分组账号池</EmptyTitle>
             </EmptyHeader>
           </Empty>
         ) : (
-          <>
-            <AccountTable accounts={filteredAccounts} busyAccounts={busyAccounts} onToggle={updateSchedulable} />
-            <AccountCards accounts={filteredAccounts} busyAccounts={busyAccounts} onToggle={updateSchedulable} />
-          </>
+          <Tabs value={activeGroup} onValueChange={setActiveGroup} className="min-w-0 gap-3">
+            <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
+              {filteredGroups.map((group) => (
+                <TabsTrigger key={group.id} value={String(group.id)} className="h-9 flex-none px-3">
+                  <span className="max-w-44 truncate">{group.name}</span>
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{group.primary_pool.length + group.fallback_pool.length}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {selectedGroup ? (
+              <TabsContent value={String(selectedGroup.id)}>
+                <GroupCard
+                  group={selectedGroup}
+                  draft={weightDrafts[selectedGroup.id] ?? createGroupWeightDraft(selectedGroup)}
+                  busyAccounts={busyAccounts}
+                  saving={busyGroups.has(selectedGroup.id)}
+                  onToggle={updateSchedulable}
+                  onWeightChange={updateWeight}
+                  onSave={() => void saveWeights(selectedGroup)}
+                />
+              </TabsContent>
+            ) : null}
+          </Tabs>
         )}
       </section>
     </section>
+  )
+}
+
+function GroupCard({
+  group,
+  draft,
+  busyAccounts,
+  saving,
+  onToggle,
+  onWeightChange,
+  onSave,
+}: {
+  group: Sub2APIOverviewGroup
+  draft: GroupWeightDraft
+  busyAccounts: Set<number>
+  saving: boolean
+  onToggle: (entry: Sub2APIOverviewPoolEntry, next: boolean) => void
+  onWeightChange: (groupID: number, pool: "primary" | "fallback", index: number, value: string) => void
+  onSave: () => void
+}) {
+  const dirty = isWeightDraftDirty(group, draft)
+  return (
+    <Card className="min-w-0 gap-0 overflow-hidden rounded-lg py-0 shadow-none">
+      <CardContent className="space-y-5 p-4 sm:p-5">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-foreground" title={group.name}>{group.name}</h3>
+              <Badge variant={group.smart_dispatch_enabled ? "default" : "outline"}>
+                {group.smart_dispatch_enabled ? "智能调度" : "普通调度"}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">{group.platform || "未指定平台"} · 倍率 {formatNumber(group.ratio)} · #{group.id}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">权重范围 1-999；保存仅更新当前分组的智能调度路由。</p>
+          </div>
+          <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
+            {saving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {saving ? "保存中" : "保存权重"}
+          </Button>
+        </div>
+        <div className="grid gap-5 lg:grid-cols-2">
+          <PoolSection title="主调度池" pool="primary" groupID={group.id} entries={group.primary_pool} weights={draft.primary} busyAccounts={busyAccounts} onToggle={onToggle} onWeightChange={onWeightChange} />
+          <PoolSection title="保底池" pool="fallback" groupID={group.id} entries={group.fallback_pool} weights={draft.fallback} busyAccounts={busyAccounts} onToggle={onToggle} onWeightChange={onWeightChange} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function PoolSection({
+  title,
+  pool,
+  groupID,
+  entries,
+  weights,
+  busyAccounts,
+  onToggle,
+  onWeightChange,
+}: {
+  title: string
+  pool: "primary" | "fallback"
+  groupID: number
+  entries: Sub2APIOverviewPoolEntry[]
+  weights: string[]
+  busyAccounts: Set<number>
+  onToggle: (entry: Sub2APIOverviewPoolEntry, next: boolean) => void
+  onWeightChange: (groupID: number, pool: "primary" | "fallback", index: number, value: string) => void
+}) {
+  return (
+    <div className="min-w-0 space-y-2">
+      <div className="flex items-center gap-2 border-b border-border pb-2">
+        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+        <Badge variant="secondary" className="font-mono">{entries.length}</Badge>
+      </div>
+      {entries.length === 0 ? (
+        <p className="py-5 text-center text-xs text-muted-foreground">未配置账号池</p>
+      ) : (
+        <div className="divide-y divide-border">
+          {entries.map((entry, index) => (
+            <PoolEntryRow
+              key={`${entry.kind}-${entry.id}-${index}`}
+              entry={entry}
+              weight={weights[index] ?? String(entry.weight)}
+              busy={busyAccounts.has(entry.id)}
+              onToggle={onToggle}
+              onWeightChange={(value) => onWeightChange(groupID, pool, index, value)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PoolEntryRow({
+  entry,
+  weight,
+  busy,
+  onToggle,
+  onWeightChange,
+}: {
+  entry: Sub2APIOverviewPoolEntry
+  weight: string
+  busy: boolean
+  onToggle: (entry: Sub2APIOverviewPoolEntry, next: boolean) => void
+  onWeightChange: (value: string) => void
+}) {
+  const virtual = entry.kind === "virtual"
+  const validWeight = isValidWeight(weight)
+  return (
+    <div className="flex min-w-0 flex-wrap items-start gap-2 py-3 first:pt-1 last:pb-1 sm:flex-nowrap">
+      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        {virtual ? <Database className="size-4" /> : <Server className="size-4" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <p className="max-w-full truncate text-xs font-medium text-foreground" title={entry.name}>{entry.name}</p>
+          <Badge variant="outline" className="shrink-0 text-[10px]">{virtual ? "虚拟池" : "真实上游"}</Badge>
+          {entry.managed ? <Badge variant="secondary" className="max-w-28 truncate text-[10px]">托管</Badge> : null}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+          {virtual ? (
+            <span className={entry.available ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground"}>
+              {entry.member_count ?? 0} 个可用授权账号
+            </span>
+          ) : (
+            <>
+              <span>{entry.platform || "未知平台"}</span>
+              {entry.concurrency ? <span>并发 {entry.concurrency}</span> : null}
+              {entry.proxy_name ? <span>代理 {entry.proxy_name}</span> : null}
+            </>
+          )}
+        </div>
+      </div>
+      <div className="ml-10 flex shrink-0 items-center gap-3 sm:ml-0">
+        {virtual ? (
+          <Badge variant={entry.available ? "outline" : "secondary"} className="text-[10px]">{entry.available ? "可用" : "空池"}</Badge>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <Switch checked={entry.schedulable} disabled={busy} aria-label={`${entry.name}调度`} onCheckedChange={(next) => onToggle(entry, next)} />
+            <span className="hidden text-[11px] text-muted-foreground sm:inline">{busy ? "更新中" : entry.schedulable ? "可调度" : "已停用"}</span>
+          </div>
+        )}
+        <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          权重
+          <Input
+            type="number"
+            min={1}
+            max={999}
+            step={1}
+            value={weight}
+            aria-label={`${entry.name}权重`}
+            aria-invalid={!validWeight}
+            onChange={(event) => onWeightChange(event.target.value)}
+            className={cn("h-8 w-20 px-2 text-right font-mono text-xs", !validWeight && "border-destructive focus-visible:ring-destructive/30")}
+          />
+        </label>
+      </div>
+    </div>
   )
 }
 
@@ -314,99 +472,12 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
   )
 }
 
-function SectionHeading({ title, count, total }: { title: string; count: number; total?: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-      <Badge variant="secondary" className="font-mono">
-        {total != null && total !== count ? `${count}/${total}` : count}
-      </Badge>
-    </div>
-  )
-}
-
-function GroupSummary({ groups }: { groups: Sub2APIOverviewGroup[] }) {
-  return (
-    <>
-      <div className="hidden overflow-hidden rounded-lg border border-border sm:block">
-        <Table>
-          <TableHeader className="bg-muted/40">
-            <TableRow>
-              <TableHead>分组</TableHead>
-              <TableHead>平台</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead className="text-right">倍率</TableHead>
-              <TableHead className="text-right">账号</TableHead>
-              <TableHead className="text-right">启用</TableHead>
-              <TableHead className="text-right">可调度</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {groups.map((item) => (
-              <TableRow key={item.id || "ungrouped"}>
-                <TableCell className="font-medium">{item.name}</TableCell>
-                <TableCell>{item.platform || "-"}</TableCell>
-                <TableCell><StatusBadge status={item.status} /></TableCell>
-                <TableCell className="text-right font-mono">{formatNumber(item.ratio)}</TableCell>
-                <TableCell className="text-right tabular-nums">{item.account_count}</TableCell>
-                <TableCell className="text-right tabular-nums">{item.active_account_count}</TableCell>
-                <TableCell className="text-right tabular-nums">{item.schedulable_account_count}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-      <div className="grid gap-2 sm:hidden">
-        {groups.map((item) => (
-          <Card key={item.id || "ungrouped"} className="gap-3 rounded-lg py-3 shadow-none">
-            <CardContent className="space-y-3 px-3">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="break-words text-sm font-medium text-foreground">{item.name}</p>
-                  <p className="text-xs text-muted-foreground">{item.platform || "未指定平台"} · 倍率 {formatNumber(item.ratio)}</p>
-                </div>
-                <StatusBadge status={item.status} />
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <GroupCount label="账号" value={item.account_count} />
-                <GroupCount label="启用" value={item.active_account_count} />
-                <GroupCount label="可调度" value={item.schedulable_account_count} />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function GroupCount({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-muted/60 px-2 py-1.5">
-      <p className="text-muted-foreground">{label}</p>
-      <p className="font-mono text-sm font-semibold text-foreground">{value}</p>
-    </div>
-  )
-}
-
 type FilterItem = string | { value: string; label: string }
 
-function FilterSelect({
-  value,
-  onChange,
-  placeholder,
-  items,
-}: {
-  value: string
-  onChange: (value: string) => void
-  placeholder: string
-  items: FilterItem[]
-}) {
+function FilterSelect({ value, onChange, placeholder, items }: { value: string; onChange: (value: string) => void; placeholder: string; items: FilterItem[] }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-full">
-        <SelectValue />
-      </SelectTrigger>
+      <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{placeholder}</SelectItem>
         {items.map((raw) => {
@@ -418,209 +489,79 @@ function FilterSelect({
   )
 }
 
-function AccountTable({
-  accounts,
-  busyAccounts,
-  onToggle,
-}: {
-  accounts: Sub2APIOverviewAccount[]
-  busyAccounts: Set<number>
-  onToggle: (account: Sub2APIOverviewAccount, next: boolean) => void
-}) {
-  return (
-    <div className="hidden overflow-hidden rounded-lg border border-border md:block">
-      <Table>
-        <TableHeader className="bg-muted/40">
-          <TableRow>
-            <TableHead>账号</TableHead>
-            <TableHead>分组</TableHead>
-            <TableHead>状态</TableHead>
-            <TableHead>调度</TableHead>
-            <TableHead className="text-right">倍率</TableHead>
-            <TableHead className="text-right">并发 / 优先级</TableHead>
-            <TableHead>代理</TableHead>
-            <TableHead>来源</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {accounts.map((account) => (
-            <TableRow key={account.id}>
-              <TableCell>
-                <AccountIdentity account={account} />
-              </TableCell>
-              <TableCell className="max-w-72 whitespace-normal"><GroupBadges account={account} /></TableCell>
-              <TableCell><StatusBadge status={account.status} /></TableCell>
-              <TableCell>
-                <ScheduleSwitch account={account} busy={busyAccounts.has(account.id)} onToggle={onToggle} />
-              </TableCell>
-              <TableCell className="text-right font-mono">{formatNumber(account.rate_multiplier)}</TableCell>
-              <TableCell className="text-right font-mono">{account.concurrency} / {account.priority}</TableCell>
-              <TableCell>{account.proxy_name || "-"}</TableCell>
-              <TableCell><ManagedBadge account={account} /></TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-function AccountCards({
-  accounts,
-  busyAccounts,
-  onToggle,
-}: {
-  accounts: Sub2APIOverviewAccount[]
-  busyAccounts: Set<number>
-  onToggle: (account: Sub2APIOverviewAccount, next: boolean) => void
-}) {
-  return (
-    <div className="grid gap-2 md:hidden">
-      {accounts.map((account) => (
-        <Card key={account.id} className="min-w-0 w-full gap-3 rounded-lg py-4 shadow-none">
-          <CardContent className="space-y-3 px-4">
-            <div className="flex items-start justify-between gap-3">
-              <AccountIdentity account={account} />
-              <ScheduleSwitch account={account} busy={busyAccounts.has(account.id)} onToggle={onToggle} />
-            </div>
-            <GroupBadges account={account} />
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-              <MobileField label="状态"><StatusBadge status={account.status} /></MobileField>
-              <MobileField label="来源"><ManagedBadge account={account} /></MobileField>
-              <MobileField label="倍率"><span className="font-mono">{formatNumber(account.rate_multiplier)}</span></MobileField>
-              <MobileField label="并发 / 优先级"><span className="font-mono">{account.concurrency} / {account.priority}</span></MobileField>
-              <MobileField label="代理"><span>{account.proxy_name || "-"}</span></MobileField>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
-function AccountIdentity({ account }: { account: Sub2APIOverviewAccount }) {
-  return (
-    <div className="min-w-0">
-      <p className="max-w-64 truncate font-medium text-foreground" title={account.name}>{account.name}</p>
-      <p className="text-xs text-muted-foreground">#{account.id} · {account.platform || "未知平台"} · {account.type || "未知类型"}</p>
-    </div>
-  )
-}
-
-function GroupBadges({ account }: { account: Sub2APIOverviewAccount }) {
-  if (!account.groups.length) return <Badge variant="outline">未分组</Badge>
-  return (
-    <div className="flex flex-wrap gap-1">
-      {account.groups.map((item) => <Badge key={item.id} variant="secondary">{item.name}</Badge>)}
-    </div>
-  )
-}
-
-function ManagedBadge({ account }: { account: Sub2APIOverviewAccount }) {
-  if (!account.managed) return <Badge variant="outline">非托管</Badge>
-  const names = account.managed_sync_group_names?.join("、") || "UpstreamOps"
-  return <Badge className="max-w-48 truncate bg-sky-100 text-sky-800 hover:bg-sky-100 dark:bg-sky-950 dark:text-sky-200" title={names}>{names}</Badge>
-}
-
-function ScheduleSwitch({
-  account,
-  busy,
-  onToggle,
-}: {
-  account: Sub2APIOverviewAccount
-  busy: boolean
-  onToggle: (account: Sub2APIOverviewAccount, next: boolean) => void
-}) {
-  return (
-    <div className="flex w-24 items-center gap-2">
-      <Switch
-        checked={account.schedulable}
-        disabled={busy}
-        aria-label={`${account.name}调度`}
-        onCheckedChange={(next) => onToggle(account, next)}
-      />
-      <span className="text-xs text-muted-foreground">{busy ? "更新中" : account.schedulable ? "可调度" : "已停用"}</span>
-    </div>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const active = status.toLocaleLowerCase() === "active"
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "border-transparent",
-        active
-          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-          : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
-      )}
-    >
-      {statusLabel(status)}
-    </Badge>
-  )
-}
-
-function MobileField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0 space-y-1">
-      <p className="text-muted-foreground">{label}</p>
-      <div className="min-w-0 text-foreground">{children}</div>
-    </div>
-  )
-}
-
 function OverviewSkeleton() {
   return (
     <section className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div className="space-y-2"><Skeleton className="h-6 w-40" /><Skeleton className="h-3 w-64" /></div>
-        <Skeleton className="size-9" />
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        {Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
-      </div>
-      <Skeleton className="h-48 w-full" />
-      <Skeleton className="h-80 w-full" />
+      <div className="flex items-center justify-between"><div className="space-y-2"><Skeleton className="h-6 w-52" /><Skeleton className="h-3 w-64" /></div><Skeleton className="size-9" /></div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}</div>
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-72 w-full" />
     </section>
   )
 }
 
-function applySchedulableUpdate(data: Sub2APIOverview, accountID: number, schedulable: boolean): Sub2APIOverview {
-  const accounts = data.accounts.map((account) => account.id === accountID ? { ...account, schedulable } : account)
-  const groups = data.groups.map((group) => recalculateGroup(group, accounts))
+function createGroupWeightDraft(group: Sub2APIOverviewGroup): GroupWeightDraft {
   return {
-    ...data,
-    accounts,
-    groups,
-    summary: {
-      ...data.summary,
-      schedulable_accounts: accounts.filter((account) => account.schedulable).length,
-    },
+    primary: group.primary_pool.map((entry) => String(entry.weight)),
+    fallback: group.fallback_pool.map((entry) => String(entry.weight)),
   }
 }
 
-function recalculateGroup(group: Sub2APIOverviewGroup, accounts: Sub2APIOverviewAccount[]): Sub2APIOverviewGroup {
-  const members = accounts.filter((account) =>
-    group.id === 0 ? account.groups.length === 0 : account.groups.some((item) => item.id === group.id),
-  )
-  return {
-    ...group,
-    account_count: members.length,
-    active_account_count: members.filter((account) => account.status.toLocaleLowerCase() === "active").length,
-    schedulable_account_count: members.filter((account) => account.schedulable).length,
+function createWeightDrafts(groups: Sub2APIOverviewGroup[]) {
+  return Object.fromEntries(groups.map((group) => [group.id, createGroupWeightDraft(group)])) as Record<number, GroupWeightDraft>
+}
+
+function isValidWeight(value: string) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999
+}
+
+function buildRoutingEntries(entries: Sub2APIOverviewPoolEntry[], weights: string[]): Sub2APISmartRoutingEntry[] | null {
+  const result: Sub2APISmartRoutingEntry[] = []
+  for (let index = 0; index < entries.length; index += 1) {
+    const raw = weights[index] ?? String(entries[index].weight)
+    if (!isValidWeight(raw)) return null
+    result.push({ id: entries[index].id, weight: Number(raw) })
   }
+  return result
+}
+
+function isWeightDraftDirty(group: Sub2APIOverviewGroup, draft: GroupWeightDraft) {
+  return group.primary_pool.some((entry, index) => draft.primary[index] !== String(entry.weight))
+    || group.fallback_pool.some((entry, index) => draft.fallback[index] !== String(entry.weight))
+}
+
+function applySchedulableUpdate(data: Sub2APIOverview, accountID: number, schedulable: boolean): Sub2APIOverview {
+  const updatePool = (entries: Sub2APIOverviewPoolEntry[]) => entries.map((entry) => {
+    if (entry.kind !== "account" || entry.id !== accountID) return entry
+    return { ...entry, schedulable, available: schedulable && entry.status?.toLocaleLowerCase() === "active" }
+  })
+  return {
+    ...data,
+    groups: data.groups.map((group) => ({ ...group, primary_pool: updatePool(group.primary_pool), fallback_pool: updatePool(group.fallback_pool) })),
+  }
+}
+
+function applySmartRoutingUpdate(data: Sub2APIOverview, update: Sub2APISmartRoutingUpdate): Sub2APIOverview {
+  return {
+    ...data,
+    groups: data.groups.map((group) => group.id !== update.group_id ? group : {
+      ...group,
+      smart_dispatch_enabled: update.smart_dispatch_enabled,
+      primary_pool: group.primary_pool.map((entry, index) => ({ ...entry, weight: update.primary_pool[index]?.weight ?? entry.weight })),
+      fallback_pool: group.fallback_pool.map((entry, index) => ({ ...entry, weight: update.fallback_pool[index]?.weight ?? entry.weight })),
+    }),
+  }
+}
+
+function removeFromSet(current: Set<number>, value: number) {
+  const next = new Set(current)
+  next.delete(value)
+  return next
 }
 
 function uniqueSorted(items: string[]) {
   return [...new Set(items)].sort((a, b) => a.localeCompare(b))
-}
-
-function statusLabel(status: string) {
-  const normalized = status.toLocaleLowerCase()
-  if (normalized === "active") return "启用"
-  if (normalized === "inactive" || normalized === "disabled") return "禁用"
-  return status || "未知"
 }
 
 function formatNumber(value: number) {
