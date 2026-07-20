@@ -21,6 +21,7 @@ type apiKeyChannelServiceStub struct {
 	created   *connector.APIKey
 	updated   *connector.APIKey
 	revealed  string
+	listErr   error
 	lastQuery connector.APIKeyQuery
 }
 
@@ -46,6 +47,9 @@ func (s *apiKeyChannelServiceStub) GetSubscriptionUsage(ctx context.Context, cha
 
 func (s *apiKeyChannelServiceStub) ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
 	s.lastQuery = query
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return s.page, nil
 }
 

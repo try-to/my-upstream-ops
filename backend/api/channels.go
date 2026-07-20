@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -655,6 +656,16 @@ func channelRates(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	if len(list) > 0 && d.ChannelSvc != nil {
+		filtered, err := filterRatesByActiveAPIKeys(c.Request.Context(), d.ChannelSvc, id, list)
+		if err != nil {
+			if d.Log != nil {
+				d.Log.Warn("filter channel rates by active api keys", "channel_id", id, "err", err)
+			}
+		} else {
+			list = filtered
+		}
+	}
 	policyByKey := make(map[string]storage.RateGroupPolicy)
 	if d.RatePolicies != nil {
 		policies, err := d.RatePolicies.ListByChannel(id)
@@ -683,6 +694,82 @@ func channelRates(c *gin.Context, d *Deps) {
 		out = append(out, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+type apiKeyListService interface {
+	ListAPIKeys(ctx context.Context, channelID uint, query connector.APIKeyQuery) (*connector.APIKeyPage, error)
+}
+
+const (
+	activeAPIKeyPageSize = 100
+	maxAPIKeyPages       = 10000
+)
+
+func filterRatesByActiveAPIKeys(ctx context.Context, svc apiKeyListService, channelID uint, rates []storage.RateSnapshot) ([]storage.RateSnapshot, error) {
+	groupIDs, groupNames, err := listActiveAPIKeyGroups(ctx, svc, channelID)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]storage.RateSnapshot, 0, len(rates))
+	for _, rate := range rates {
+		if rate.RemoteGroupID != nil {
+			if _, ok := groupIDs[*rate.RemoteGroupID]; ok {
+				filtered = append(filtered, rate)
+			}
+			continue
+		}
+		if _, ok := groupNames[normalizeRateGroupName(rate.ModelName)]; ok {
+			filtered = append(filtered, rate)
+		}
+	}
+	return filtered, nil
+}
+
+func listActiveAPIKeyGroups(ctx context.Context, svc apiKeyListService, channelID uint) (map[int64]struct{}, map[string]struct{}, error) {
+	groupIDs := make(map[int64]struct{})
+	groupNames := make(map[string]struct{})
+	for pageNumber := 1; pageNumber <= maxAPIKeyPages; pageNumber++ {
+		page, err := svc.ListAPIKeys(ctx, channelID, connector.APIKeyQuery{
+			Page:     pageNumber,
+			PageSize: activeAPIKeyPageSize,
+			Status:   "active",
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if page == nil {
+			return nil, nil, errors.New("渠道 API Key 列表响应为空")
+		}
+		for _, key := range page.Items {
+			if !strings.EqualFold(strings.TrimSpace(key.Status), "active") {
+				continue
+			}
+			if key.GroupID != nil {
+				groupIDs[*key.GroupID] = struct{}{}
+			}
+			for _, name := range []string{key.GroupName, key.Group} {
+				if normalized := normalizeRateGroupName(name); normalized != "" {
+					groupNames[normalized] = struct{}{}
+				}
+			}
+		}
+
+		totalPages := page.Pages
+		if calculated := int(math.Ceil(float64(page.Total) / float64(activeAPIKeyPageSize))); calculated > totalPages {
+			totalPages = calculated
+		}
+		if totalPages < 1 {
+			totalPages = 1
+		}
+		if pageNumber >= totalPages {
+			return groupIDs, groupNames, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("渠道 API Key 分页超过上限 %d", maxAPIKeyPages)
+}
+
+func normalizeRateGroupName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 type channelRateDTO struct {
