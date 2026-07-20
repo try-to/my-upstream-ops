@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertCircle,
-  Boxes,
-  CircleGauge,
   Database,
   LoaderCircle,
   RefreshCw,
@@ -11,7 +9,6 @@ import {
   Save,
   Search,
   Server,
-  UsersRound,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -232,14 +229,6 @@ export default function Sub2APIOverviewPage() {
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        <MetricCard icon={<Boxes />} label="分组总数" value={data.summary.total_groups} />
-        <MetricCard icon={<CircleGauge />} label="已启用智能调度" value={data.summary.smart_dispatch_groups} />
-        <MetricCard icon={<Server />} label="真实上游账号" value={data.summary.real_upstream_accounts} />
-        <MetricCard icon={<Database />} label="虚拟池种类" value={data.summary.virtual_pools} />
-        <MetricCard icon={<UsersRound />} label="虚拟池授权数" value={data.summary.virtual_pool_members} />
-      </div>
-
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -458,20 +447,6 @@ function PoolEntryRow({
   )
 }
 
-function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
-  return (
-    <Card className="gap-2 rounded-lg py-3 shadow-none">
-      <CardContent className="flex items-center gap-3 px-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground [&>svg]:size-4">{icon}</span>
-        <div className="min-w-0">
-          <p className="truncate text-xs text-muted-foreground">{label}</p>
-          <p className="text-xl font-semibold tabular-nums text-foreground">{value}</p>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
 type FilterItem = string | { value: string; label: string }
 
 function FilterSelect({ value, onChange, placeholder, items }: { value: string; onChange: (value: string) => void; placeholder: string; items: FilterItem[] }) {
@@ -493,7 +468,6 @@ function OverviewSkeleton() {
   return (
     <section className="space-y-5">
       <div className="flex items-center justify-between"><div className="space-y-2"><Skeleton className="h-6 w-52" /><Skeleton className="h-3 w-64" /></div><Skeleton className="size-9" /></div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}</div>
       <Skeleton className="h-10 w-full" />
       <Skeleton className="h-72 w-full" />
     </section>
