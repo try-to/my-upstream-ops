@@ -22,6 +22,8 @@ func registerUpstreamSync(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/targets/:id/groups/sync", func(c *gin.Context) { syncUpstreamSyncTargetGroups(c, d) })
 	gp.GET("/targets/:id/groups", func(c *gin.Context) { listUpstreamSyncTargetGroups(c, d) })
 	gp.GET("/targets/:id/proxies", func(c *gin.Context) { listUpstreamSyncTargetProxies(c, d) })
+	gp.GET("/overview", func(c *gin.Context) { getUpstreamSyncOverview(c, d) })
+	gp.PUT("/accounts/:account_id/schedulable", func(c *gin.Context) { updateUpstreamSyncAccountSchedulable(c, d) })
 	gp.GET("/source-models", func(c *gin.Context) { listUpstreamSyncSourceModels(c, d) })
 	gp.GET("/sync-groups", func(c *gin.Context) { listUpstreamSyncGroups(c, d) })
 	gp.POST("/sync-groups", func(c *gin.Context) { createUpstreamSyncGroup(c, d) })
@@ -30,6 +32,46 @@ func registerUpstreamSync(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/sync-groups/:id/apply", func(c *gin.Context) { applyUpstreamSyncGroup(c, d) })
 	gp.POST("/sync-groups/:id/delete-managed", func(c *gin.Context) { deleteUpstreamSyncManaged(c, d) })
 	gp.GET("/sync-groups/:id/logs", func(c *gin.Context) { listUpstreamSyncGroupLogs(c, d) })
+}
+
+func getUpstreamSyncOverview(c *gin.Context, d *Deps) {
+	item, err := d.UpstreamSync.GetOverview(c.Request.Context())
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, syncer.ErrOverviewTargetNotConfigured) || errors.Is(err, syncer.ErrOverviewMultipleTargets) {
+			status = http.StatusConflict
+		}
+		fail(c, status, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": item})
+}
+
+func updateUpstreamSyncAccountSchedulable(c *gin.Context, d *Deps) {
+	accountID, err := strconv.ParseInt(c.Param("account_id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		if err == nil {
+			err = errors.New("account_id must be greater than 0")
+		}
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	var in struct {
+		Schedulable *bool `json:"schedulable" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Schedulable == nil {
+		if err == nil {
+			err = errors.New("schedulable is required")
+		}
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	item, err := d.UpstreamSync.SetOverviewAccountSchedulable(c.Request.Context(), accountID, *in.Schedulable)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": item})
 }
 
 func listUpstreamSyncTargets(c *gin.Context, d *Deps) {

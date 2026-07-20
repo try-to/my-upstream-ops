@@ -64,6 +64,14 @@ type AdminAccount struct {
 	Credentials    map[string]any `json:"credentials"`
 }
 
+type AdminAccountPage struct {
+	Items    []AdminAccount `json:"items"`
+	Total    int64          `json:"total"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"page_size"`
+	Pages    int            `json:"pages"`
+}
+
 type AdminAccountTestResult struct {
 	Model        string
 	ResponseText string
@@ -112,17 +120,54 @@ func (a *AdminClient) ListProxies(ctx context.Context, t AdminTarget) ([]AdminPr
 }
 
 func (a *AdminClient) ListAccounts(ctx context.Context, t AdminTarget, page, pageSize int) ([]AdminAccount, error) {
+	result, err := a.ListAccountPage(ctx, t, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+func (a *AdminClient) ListAccountPage(ctx context.Context, t AdminTarget, page, pageSize int) (*AdminAccountPage, error) {
 	body, err := a.getJSON(ctx, t, "/api/v1/admin/accounts?page="+strconv.Itoa(page)+"&page_size="+strconv.Itoa(pageSize))
 	if err != nil {
 		return nil, err
 	}
-	var raw struct {
-		Items []AdminAccount `json:"items"`
-	}
-	if err := json.Unmarshal(body, &raw); err != nil {
+	var result AdminAccountPage
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decode admin accounts: %w", err)
 	}
-	return raw.Items, nil
+	if result.Page <= 0 {
+		result.Page = page
+	}
+	if result.PageSize <= 0 {
+		result.PageSize = pageSize
+	}
+	return &result, nil
+}
+
+func (a *AdminClient) ListAllAccounts(ctx context.Context, t AdminTarget) ([]AdminAccount, error) {
+	const pageSize = 1000
+	const maxPages = 100
+
+	all := make([]AdminAccount, 0)
+	for page := 1; page <= maxPages; page++ {
+		result, err := a.ListAccountPage(ctx, t, page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, result.Items...)
+		if len(result.Items) == 0 || (result.Total > 0 && int64(len(all)) >= result.Total) || (result.Pages > 0 && page >= result.Pages) {
+			return all, nil
+		}
+		effectivePageSize := result.PageSize
+		if effectivePageSize <= 0 {
+			effectivePageSize = pageSize
+		}
+		if len(result.Items) < effectivePageSize {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("list all admin accounts: exceeded %d pages", maxPages)
 }
 
 func (a *AdminClient) FindGroupByName(ctx context.Context, t AdminTarget, name string) (*AdminGroup, error) {

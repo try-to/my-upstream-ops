@@ -217,6 +217,69 @@ export interface DashboardSummary {
   recent_rate_changes: RateChangeLog[]
 }
 
+export interface Sub2APIOverviewTarget {
+  id: number
+  name: string
+  base_url: string
+  enabled: boolean
+}
+
+export interface Sub2APIOverviewSummary {
+  total_accounts: number
+  active_accounts: number
+  schedulable_accounts: number
+  managed_accounts: number
+  unmanaged_accounts: number
+}
+
+export interface Sub2APIOverviewAccountGroup {
+  id: number
+  name: string
+  platform?: string
+}
+
+export interface Sub2APIOverviewAccount {
+  id: number
+  name: string
+  platform: string
+  type: string
+  status: string
+  schedulable: boolean
+  concurrency: number
+  priority: number
+  rate_multiplier: number
+  load_factor: number
+  proxy_id?: number | null
+  proxy_name?: string
+  groups: Sub2APIOverviewAccountGroup[]
+  managed: boolean
+  managed_sync_group_names?: string[] | null
+}
+
+export interface Sub2APIOverviewGroup {
+  id: number
+  name: string
+  platform?: string
+  ratio: number
+  status: string
+  sort: number
+  account_count: number
+  active_account_count: number
+  schedulable_account_count: number
+}
+
+export interface Sub2APIOverview {
+  target: Sub2APIOverviewTarget
+  summary: Sub2APIOverviewSummary
+  groups: Sub2APIOverviewGroup[]
+  accounts: Sub2APIOverviewAccount[]
+}
+
+export interface Sub2APISchedulableUpdate {
+  account_id: number
+  schedulable: boolean
+}
+
 export interface BalanceTrendPoint {
   day: string
   balance: number

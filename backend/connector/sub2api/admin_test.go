@@ -222,3 +222,35 @@ func TestAdminClientUsesAPIKeyAndDecodesAccountWrites(t *testing.T) {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
 }
+
+func TestAdminClientListAllAccountsReadsEveryPage(t *testing.T) {
+	requestedPages := make([]string, 0, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/accounts" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		requestedPages = append(requestedPages, r.URL.Query().Get("page"))
+		items := []map[string]any{{"id": 1, "name": "a1"}, {"id": 2, "name": "a2"}}
+		if r.URL.Query().Get("page") == "2" {
+			items = []map[string]any{{"id": 3, "name": "a3"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"items": items, "total": 3, "page": len(requestedPages), "page_size": 2, "pages": 2,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	items, err := NewAdminClient().ListAllAccounts(context.Background(), AdminTarget{BaseURL: srv.URL, APIKey: t.Name()})
+	if err != nil {
+		t.Fatalf("ListAllAccounts: %v", err)
+	}
+	if len(items) != 3 || items[2].ID != 3 {
+		t.Fatalf("items = %#v", items)
+	}
+	if len(requestedPages) != 2 || requestedPages[0] != "1" || requestedPages[1] != "2" {
+		t.Fatalf("requested pages = %#v", requestedPages)
+	}
+}

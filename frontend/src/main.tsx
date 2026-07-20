@@ -14,6 +14,7 @@ import DashboardPage from '@/app/page'
 import CaptchaPage from '@/app/captcha-page'
 import NotificationsPage from '@/app/notifications-page'
 import SettingsPage from '@/app/settings-page'
+import Sub2APIOverviewPage from '@/app/sub2api-overview-page'
 import '@/app/globals.css'
 
 createRoot(document.getElementById('root')!).render(
@@ -30,6 +31,7 @@ createRoot(document.getElementById('root')!).render(
                     <Route path="captcha" element={<CaptchaPage />} />
                     <Route path="notifications" element={<NotificationsPage />} />
                     <Route path="settings" element={<SettingsPage />} />
+                    <Route path="sub2api-overview" element={<Sub2APIOverviewPage />} />
                   </Route>
                 </Routes>
               </AddChannelProvider>

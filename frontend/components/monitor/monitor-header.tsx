@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
-import { Activity, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings } from "lucide-react"
+import { Activity, Boxes, Github, Home, LogOut, RefreshCw, Sun, Moon, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -176,7 +176,7 @@ export function MonitorHeader() {
                 variant="outline"
                 size="icon"
                 onClick={() => navigate("/")}
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                className="hidden size-8 border-border bg-background text-foreground hover:bg-muted sm:inline-flex"
                 aria-label="主页"
               >
                 <Home className="size-3.5" />
@@ -184,6 +184,23 @@ export function MonitorHeader() {
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
               {"主页"}
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip delayDuration={200}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => navigate("/sub2api-overview")}
+                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                aria-label="Sub2API 聚合"
+              >
+                <Boxes className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              Sub2API 聚合
             </TooltipContent>
           </Tooltip>
 
@@ -211,7 +228,7 @@ export function MonitorHeader() {
                 asChild
                 variant="outline"
                 size="icon"
-                className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                className="hidden size-8 border-border bg-background text-foreground hover:bg-muted md:inline-flex"
                 aria-label="GitHub 仓库"
               >
                 <a
