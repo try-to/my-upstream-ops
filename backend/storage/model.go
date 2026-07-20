@@ -129,6 +129,21 @@ type RateSnapshot struct {
 
 func (RateSnapshot) TableName() string { return "rate_snapshots" }
 
+// RateGroupPolicy 保存渠道分组级的倍率自动调度配置，不随倍率快照删除。
+type RateGroupPolicy struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	ChannelID        uint      `gorm:"not null;uniqueIndex:idx_rate_group_policy" json:"channel_id"`
+	GroupKey         string    `gorm:"size:320;not null;uniqueIndex:idx_rate_group_policy" json:"group_key"`
+	RemoteGroupID    *int64    `json:"remote_group_id,omitempty"`
+	GroupName        string    `gorm:"size:256;not null" json:"group_name"`
+	MaxRatio         float64   `gorm:"not null" json:"max_ratio"`
+	CalculationRatio float64   `gorm:"not null;default:1" json:"calculation_ratio"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func (RateGroupPolicy) TableName() string { return "rate_group_policies" }
+
 // RateChangeLog 倍率变化历史。每次扫描发现差异时写入一行。
 type RateChangeLog struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`

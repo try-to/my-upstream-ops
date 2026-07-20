@@ -25,6 +25,7 @@ func (r *Channels) Delete(id uint) error {
 		}
 		for _, model := range []any{
 			&RateSnapshot{},
+			&RateGroupPolicy{},
 			&RateChangeLog{},
 			&BalanceSnapshot{},
 			&CostSnapshot{},

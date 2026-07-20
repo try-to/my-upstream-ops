@@ -65,19 +65,23 @@ func (s *Service) ScanAllBalances(ctx context.Context) {
 	}
 }
 
-// ScanAllRates 扫描所有启用监控的渠道倍率。
-func (s *Service) ScanAllRates(ctx context.Context) {
+// ScanAllRates 扫描所有启用监控的渠道倍率，返回本轮刷新成功的渠道 ID。
+func (s *Service) ScanAllRates(ctx context.Context) []uint {
 	list, err := s.channels.ListMonitorEnabled()
 	if err != nil {
 		s.log.Error("list channels", "err", err)
-		return
+		return nil
 	}
+	succeeded := make([]uint, 0, len(list))
 	for i := range list {
 		c := list[i]
 		if err := s.RefreshRates(ctx, &c); err != nil {
 			s.log.Warn("refresh rates failed", "channel", c.Name, "err", err)
+			continue
 		}
+		succeeded = append(succeeded, c.ID)
 	}
+	return succeeded
 }
 
 // RefreshBalance 单个渠道余额刷新，可被 API 手动触发。

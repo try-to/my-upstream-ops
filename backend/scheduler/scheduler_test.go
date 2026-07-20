@@ -18,7 +18,7 @@ type fakeUpstreamSync struct {
 	called int
 }
 
-func (f *fakeUpstreamSync) SyncAllOnRateScan(ctx context.Context) {
+func (f *fakeUpstreamSync) SyncAllOnRateScan(ctx context.Context, successfulChannelIDs ...uint) {
 	f.called++
 }
 

@@ -104,6 +104,10 @@ export interface RateSnapshot {
   completion_ratio: number
   first_seen_at: string
   last_seen_at: string
+  max_ratio?: number | null
+  calculation_ratio?: number
+  calculated_ratio?: number | null
+  auto_schedulable_state?: "unconfigured" | "enabled" | "disabled"
 }
 
 export interface RateChangeLog {

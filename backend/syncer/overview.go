@@ -160,6 +160,9 @@ func (s *Service) GetOverview(ctx context.Context) (*OverviewDTO, error) {
 			PrimaryPool:          buildOverviewPool(group.ModelRouting["*"], group.ModelRouting[smartDispatchPrimaryWeightsKey], accountByID, proxyNames, managedNames, virtualCounts),
 			FallbackPool:         buildOverviewPool(group.ModelRouting[smartDispatchFallbackKey], group.ModelRouting[smartDispatchFallbackWeightsKey], accountByID, proxyNames, managedNames, virtualCounts),
 		}
+		if len(item.PrimaryPool) == 0 && len(item.FallbackPool) == 0 {
+			continue
+		}
 		if item.SmartDispatchEnabled {
 			out.Summary.SmartDispatchGroups++
 		}

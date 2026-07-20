@@ -324,6 +324,9 @@ func applyUpstreamSyncGroup(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
+	if err := d.UpstreamSync.ReconcileSyncGroupRatePolicies(c.Request.Context(), id); err != nil && d.Log != nil {
+		d.Log.Warn("reconcile rate policies after manual sync group apply", "syncGroupID", id, "err", err)
+	}
 	c.JSON(http.StatusOK, gin.H{"data": log})
 }
 

@@ -120,11 +120,13 @@ function ratioTone(r: number): string {
 }
 
 /** InlineRates 在渠道卡片内部展示当前所有分组倍率，默认 2 行折叠 + 展开按钮。 */
-function InlineRates({ channelID }: { channelID: number }) {
-  const { data, loading } = useChannelRates(channelID)
+function InlineRates({ channel }: { channel: Channel }) {
+  const { data, loading } = useChannelRates(channel.id)
+  const refresh = useTriggerRefresh()
   const rates = [...(data ?? [])].sort((a, b) => a.ratio - b.ratio)
   const [expanded, setExpanded] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
+  const [selectedRate, setSelectedRate] = useState<RateSnapshot | null>(null)
   const chipBoxRef = useRef<HTMLDivElement>(null)
 
   // 监听 chip 容器尺寸变化，决定是否要显示"展开"按钮。
@@ -182,9 +184,12 @@ function InlineRates({ channelID }: { channelID: number }) {
           {rates.map((r) => (
             <Tooltip key={r.id} delayDuration={150}>
               <TooltipTrigger asChild>
-                <span
+                <button
+                  type="button"
+                  aria-label={`配置 ${r.model_name} 倍率自动启停`}
+                  onClick={() => setSelectedRate(r)}
                   className={cn(
-                    "inline-flex cursor-default items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ring-1 ring-inset transition-colors hover:bg-muted/60",
+                    "inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ring-1 ring-inset transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     ratioTone(r.ratio),
                   )}
                 >
@@ -192,7 +197,17 @@ function InlineRates({ channelID }: { channelID: number }) {
                   <span className="rounded bg-primary/10 px-1 font-semibold tabular-nums text-primary ring-1 ring-inset ring-primary/15">
                     {formatRatio(r.ratio)}
                   </span>
-                </span>
+                  {r.max_ratio != null ? (
+                    <span className={cn(
+                      "rounded px-1 font-medium tabular-nums ring-1 ring-inset",
+                      r.auto_schedulable_state === "disabled"
+                        ? "bg-danger/10 text-danger ring-danger/20"
+                        : "bg-success/10 text-success ring-success/20",
+                    )}>
+                      上限 {formatRatio(r.max_ratio)}
+                    </span>
+                  ) : null}
+                </button>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs text-xs">
                 <p className="font-medium">{r.model_name}</p>
@@ -205,6 +220,13 @@ function InlineRates({ channelID }: { channelID: number }) {
                   {"最近更新："}
                   {relativeTime(r.last_seen_at)}
                 </p>
+                {r.max_ratio == null ? (
+                  <p className="mt-1 font-medium">点击配置倍率自动启停</p>
+                ) : (
+                  <p className="mt-1 font-medium">
+                    {`判定 ${formatRatio(r.calculated_ratio ?? r.ratio)} / 最大 ${formatRatio(r.max_ratio)} · ${r.auto_schedulable_state === "disabled" ? "应停用" : "应启用"}`}
+                  </p>
+                )}
               </TooltipContent>
             </Tooltip>
           ))}
@@ -214,7 +236,143 @@ function InlineRates({ channelID }: { channelID: number }) {
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-linear-to-t from-background to-transparent" />
         ) : null}
       </div>
+      <RatePolicyDialog
+        channel={channel}
+        rate={selectedRate}
+        open={selectedRate != null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRate(null)
+        }}
+        onSaved={() => {
+          refresh()
+          setSelectedRate(null)
+        }}
+      />
     </div>
+  )
+}
+
+function RatePolicyDialog({
+  channel,
+  rate,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  channel: Channel
+  rate: RateSnapshot | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSaved: () => void
+}) {
+  const [maxRatio, setMaxRatio] = useState("")
+  const [calculationRatio, setCalculationRatio] = useState("1")
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open || !rate) return
+    setMaxRatio(rate.max_ratio == null ? "" : String(rate.max_ratio))
+    setCalculationRatio(String(rate.calculation_ratio ?? 1))
+  }, [open, rate])
+
+  if (!rate) return null
+  const currentRate = rate
+
+  const parsedMax = maxRatio.trim() === "" ? null : Number(maxRatio)
+  const parsedRatio = Number(calculationRatio)
+  const validMax = parsedMax == null || (Number.isFinite(parsedMax) && parsedMax >= 0)
+  const validRatio = Number.isFinite(parsedRatio) && parsedRatio > 0
+  const calculated = validRatio ? rate.ratio * parsedRatio : null
+  const nextDisabled = calculated != null && parsedMax != null && calculated > parsedMax
+
+  async function savePolicy(disable: boolean) {
+    if ((!disable && !validMax) || !validRatio) {
+      toast.error("最大倍率必须大于等于 0，计算比例必须大于 0")
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await apiFetch<{ reconcile_error?: string }>(`/channels/${channel.id}/rate-groups/policy`, {
+        method: "PUT",
+        body: JSON.stringify({
+          remote_group_id: currentRate.remote_group_id ?? null,
+          group_name: currentRate.model_name,
+          max_ratio: disable ? null : parsedMax,
+          calculation_ratio: parsedRatio,
+        }),
+      })
+      toast.success(disable || parsedMax == null ? "已关闭该分组自动启停" : "渠道分组倍率策略已保存")
+      if (result.reconcile_error) {
+        toast.warning(`策略已保存，但账号调度同步失败：${result.reconcile_error}`)
+      }
+      onSaved()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存渠道分组倍率策略失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-base">倍率自动启停</DialogTitle>
+          <DialogDescription>{channel.name} · {rate.model_name}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <StatTile label="当前倍率">{formatRatio(rate.ratio)}</StatTile>
+            <StatTile label="判定倍率">{calculated == null ? "-" : formatRatio(calculated)}</StatTile>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5 text-xs font-medium text-foreground">
+              最大允许倍率
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                value={maxRatio}
+                aria-invalid={!validMax}
+                placeholder="留空不自动启停"
+                onChange={(event) => setMaxRatio(event.target.value)}
+              />
+            </label>
+            <label className="space-y-1.5 text-xs font-medium text-foreground">
+              计算比例
+              <Input
+                type="number"
+                min="0.000001"
+                step="any"
+                value={calculationRatio}
+                aria-invalid={!validRatio}
+                onChange={(event) => setCalculationRatio(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            {parsedMax == null ? (
+              "未设置最大倍率，不会自动改变 Sub2API 账号调度。"
+            ) : (
+              <>{`当前判定：${formatRatio(rate.ratio)} × ${formatRatio(parsedRatio)} = ${calculated == null ? "-" : formatRatio(calculated)}，账号将${nextDisabled ? "禁用" : "启用"}调度。`}</>
+            )}
+          </div>
+          <div className="flex flex-wrap justify-between gap-2">
+            <Button
+              variant="outline"
+              disabled={saving || rate.max_ratio == null}
+              onClick={() => void savePolicy(true)}
+            >
+              关闭自动启停
+            </Button>
+            <Button disabled={saving || !validMax || !validRatio} onClick={() => void savePolicy(false)}>
+              {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+              保存
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -893,7 +1051,7 @@ export function ChannelCards() {
                     ) : null}
                   </div>
 
-                  <InlineRates channelID={c.id} />
+                  <InlineRates channel={c} />
 
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <Button

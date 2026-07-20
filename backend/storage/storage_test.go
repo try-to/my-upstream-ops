@@ -83,6 +83,44 @@ func TestAggregateBalanceTrend(t *testing.T) {
 	}
 }
 
+func TestRateGroupPoliciesPersistIndependentlyFromSnapshots(t *testing.T) {
+	db := openTestDB(t)
+	policies := NewRateGroupPolicies(db)
+	remoteID := int64(7)
+	item := &RateGroupPolicy{
+		ChannelID: 3, GroupKey: RateGroupKey(&remoteID, "plus"), RemoteGroupID: &remoteID,
+		GroupName: "plus", MaxRatio: 0.5, CalculationRatio: 1.25,
+	}
+	if err := policies.Upsert(item); err != nil {
+		t.Fatalf("upsert policy: %v", err)
+	}
+	item.MaxRatio = 0.8
+	if err := policies.Upsert(item); err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+	got, err := policies.Find(3, RateGroupKey(&remoteID, "renamed"))
+	if err != nil {
+		t.Fatalf("find policy: %v", err)
+	}
+	if got == nil || got.MaxRatio != 0.8 || got.CalculationRatio != 1.25 {
+		t.Fatalf("policy = %#v", got)
+	}
+	if err := db.Where("channel_id = ?", 3).Delete(&RateSnapshot{}).Error; err != nil {
+		t.Fatalf("delete snapshots: %v", err)
+	}
+	got, err = policies.Find(3, item.GroupKey)
+	if err != nil || got == nil {
+		t.Fatalf("policy should survive snapshot deletion: %#v, %v", got, err)
+	}
+	if err := policies.Delete(3, item.GroupKey); err != nil {
+		t.Fatalf("delete policy: %v", err)
+	}
+	got, err = policies.Find(3, item.GroupKey)
+	if err != nil || got != nil {
+		t.Fatalf("deleted policy = %#v, %v", got, err)
+	}
+}
+
 func TestChannelProxyEnabledPersists(t *testing.T) {
 	db := openTestDB(t)
 	channels := NewChannels(db)
@@ -844,6 +882,9 @@ func TestDeleteChannelCleansScopedState(t *testing.T) {
 	if err := db.Create(&RateSnapshot{ChannelID: ch.ID, ModelName: "old", Ratio: 1, LastSeenAt: now}).Error; err != nil {
 		t.Fatalf("create rate snapshot: %v", err)
 	}
+	if err := db.Create(&RateGroupPolicy{ChannelID: ch.ID, GroupKey: "name:old", GroupName: "old", MaxRatio: 1, CalculationRatio: 1}).Error; err != nil {
+		t.Fatalf("create rate group policy: %v", err)
+	}
 	if err := db.Create(&RateChangeLog{ChannelID: ch.ID, ModelName: "old", NewRatio: 1, ChangedAt: now}).Error; err != nil {
 		t.Fatalf("create rate change: %v", err)
 	}
@@ -879,6 +920,7 @@ func TestDeleteChannelCleansScopedState(t *testing.T) {
 	}{
 		{"auth_sessions", &AuthSession{}},
 		{"rate_snapshots", &RateSnapshot{}},
+		{"rate_group_policies", &RateGroupPolicy{}},
 		{"rate_change_logs", &RateChangeLog{}},
 		{"balance_snapshots", &BalanceSnapshot{}},
 		{"cost_snapshots", &CostSnapshot{}},

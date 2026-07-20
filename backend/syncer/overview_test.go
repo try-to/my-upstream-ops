@@ -109,10 +109,10 @@ func TestGetOverviewUsesSmartDispatchPoolsAndRedactsAuthorizationAccounts(t *tes
 	if err != nil {
 		t.Fatalf("GetOverview: %v", err)
 	}
-	if overview.Summary.TotalGroups != 2 || overview.Summary.SmartDispatchGroups != 1 || overview.Summary.RealUpstreamAccounts != 1 || overview.Summary.VirtualPools != 2 || overview.Summary.VirtualPoolMembers != 2 {
+	if overview.Summary.TotalGroups != 1 || overview.Summary.SmartDispatchGroups != 1 || overview.Summary.RealUpstreamAccounts != 1 || overview.Summary.VirtualPools != 2 || overview.Summary.VirtualPoolMembers != 2 {
 		t.Fatalf("summary = %#v", overview.Summary)
 	}
-	if len(overview.Groups) != 2 || len(overview.Groups[0].PrimaryPool) != 2 || overview.Groups[0].PrimaryPool[0].Name != "OpenAI OAuth Plus" || overview.Groups[0].PrimaryPool[0].MemberCount != 1 || overview.Groups[0].PrimaryPool[1].Name != "真实上游" || overview.Groups[0].PrimaryPool[1].Managed != true {
+	if len(overview.Groups) != 1 || len(overview.Groups[0].PrimaryPool) != 2 || overview.Groups[0].PrimaryPool[0].Name != "OpenAI OAuth Plus" || overview.Groups[0].PrimaryPool[0].MemberCount != 1 || overview.Groups[0].PrimaryPool[1].Name != "真实上游" || overview.Groups[0].PrimaryPool[1].Managed != true {
 		t.Fatalf("groups = %#v", overview.Groups)
 	}
 	if len(overview.Groups[0].FallbackPool) != 1 || overview.Groups[0].FallbackPool[0].Name != "OpenAI OAuth Pro" || overview.Groups[0].FallbackPool[0].MemberCount != 1 {

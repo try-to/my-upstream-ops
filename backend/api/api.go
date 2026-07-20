@@ -58,6 +58,7 @@ type Deps struct {
 	Notifies      *storage.Notifications
 	Announcements *storage.UpstreamAnnouncements
 	Rates         *storage.Rates
+	RatePolicies  *storage.RateGroupPolicies
 	MonLogs       *storage.MonitorLogs
 	ChannelSvc    channelService
 	Monitor       monitorService

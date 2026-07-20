@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +47,7 @@ func registerChannels(g *gin.RouterGroup, d *Deps) {
 	gp.POST("/:id/api-keys/:key_id/reveal", func(c *gin.Context) { revealChannelAPIKey(c, d) })
 	gp.POST("/:id/sync", func(c *gin.Context) { syncChannel(c, d) })
 	gp.GET("/:id/rates", func(c *gin.Context) { channelRates(c, d) })
+	gp.PUT("/:id/rate-groups/policy", func(c *gin.Context) { updateChannelRateGroupPolicy(c, d) })
 	gp.GET("/:id/balance-history", func(c *gin.Context) { balanceHistory(c, d) })
 }
 
@@ -381,6 +384,12 @@ func refreshRates(c *gin.Context, d *Deps) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
+	if d.UpstreamSync != nil {
+		if err := d.UpstreamSync.ReconcileChannelRatePolicies(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -646,7 +655,121 @@ func channelRates(c *gin.Context, d *Deps) {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
+	policyByKey := make(map[string]storage.RateGroupPolicy)
+	if d.RatePolicies != nil {
+		policies, err := d.RatePolicies.ListByChannel(id)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		for _, policy := range policies {
+			policyByKey[policy.GroupKey] = policy
+		}
+	}
+	out := make([]channelRateDTO, 0, len(list))
+	for _, snapshot := range list {
+		item := channelRateDTO{RateSnapshot: snapshot, CalculationRatio: 1, AutoSchedulableState: "unconfigured"}
+		if policy, ok := policyByKey[storage.RateGroupKey(snapshot.RemoteGroupID, snapshot.ModelName)]; ok {
+			maxRatio := policy.MaxRatio
+			calculated := snapshot.Ratio * policy.CalculationRatio
+			item.MaxRatio = &maxRatio
+			item.CalculationRatio = policy.CalculationRatio
+			item.CalculatedRatio = &calculated
+			item.AutoSchedulableState = "enabled"
+			if calculated > maxRatio {
+				item.AutoSchedulableState = "disabled"
+			}
+		}
+		out = append(out, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
+}
+
+type channelRateDTO struct {
+	storage.RateSnapshot
+	MaxRatio             *float64 `json:"max_ratio"`
+	CalculationRatio     float64  `json:"calculation_ratio"`
+	CalculatedRatio      *float64 `json:"calculated_ratio"`
+	AutoSchedulableState string   `json:"auto_schedulable_state"`
+}
+
+func updateChannelRateGroupPolicy(c *gin.Context, d *Deps) {
+	id, err := uintParam(c, "id")
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	if d.RatePolicies == nil {
+		fail(c, http.StatusServiceUnavailable, fmt.Errorf("渠道分组倍率策略服务未启用"))
+		return
+	}
+	if _, err := d.Channels.FindByID(id); err != nil {
+		fail(c, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		RemoteGroupID    *int64   `json:"remote_group_id"`
+		GroupName        string   `json:"group_name" binding:"required"`
+		MaxRatio         *float64 `json:"max_ratio"`
+		CalculationRatio float64  `json:"calculation_ratio"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
+	if math.IsNaN(in.CalculationRatio) || math.IsInf(in.CalculationRatio, 0) || in.CalculationRatio <= 0 {
+		fail(c, http.StatusBadRequest, fmt.Errorf("计算比例必须大于 0"))
+		return
+	}
+	if in.MaxRatio != nil && (math.IsNaN(*in.MaxRatio) || math.IsInf(*in.MaxRatio, 0) || *in.MaxRatio < 0) {
+		fail(c, http.StatusBadRequest, fmt.Errorf("最大允许倍率必须大于等于 0"))
+		return
+	}
+	snapshots, err := d.Rates.ListByChannel(id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	snapshot := findRateSnapshot(snapshots, in.RemoteGroupID, in.GroupName)
+	if snapshot == nil {
+		fail(c, http.StatusBadRequest, fmt.Errorf("渠道分组不存在，请刷新倍率后重试"))
+		return
+	}
+	groupKey := storage.RateGroupKey(snapshot.RemoteGroupID, snapshot.ModelName)
+	if in.MaxRatio == nil {
+		if err := d.RatePolicies.Delete(id, groupKey); err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+	} else if err := d.RatePolicies.Upsert(&storage.RateGroupPolicy{
+		ChannelID: id, GroupKey: groupKey, RemoteGroupID: snapshot.RemoteGroupID,
+		GroupName: snapshot.ModelName, MaxRatio: *in.MaxRatio, CalculationRatio: in.CalculationRatio,
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, err)
+		return
+	}
+	reconcileError := ""
+	if d.UpstreamSync != nil {
+		if err := d.UpstreamSync.ReconcileChannelRatePolicies(c.Request.Context(), id); err != nil {
+			reconcileError = err.Error()
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"channel_id": id, "group_key": groupKey, "reconcile_error": reconcileError}})
+}
+
+func findRateSnapshot(list []storage.RateSnapshot, remoteGroupID *int64, groupName string) *storage.RateSnapshot {
+	groupName = strings.TrimSpace(groupName)
+	for i := range list {
+		if remoteGroupID != nil && list[i].RemoteGroupID != nil && *remoteGroupID == *list[i].RemoteGroupID {
+			return &list[i]
+		}
+	}
+	for i := range list {
+		if strings.EqualFold(strings.TrimSpace(list[i].ModelName), groupName) {
+			return &list[i]
+		}
+	}
+	return nil
 }
 
 func balanceHistory(c *gin.Context, d *Deps) {
@@ -813,10 +936,14 @@ func syncChannel(c *gin.Context, d *Deps) {
 		subErr = d.Monitor.CheckSubscriptionUsageAlerts(ctx, ch)
 	}
 	rateErr := d.Monitor.RefreshRates(ctx, ch)
+	var ratePolicyErr error
+	if rateErr == nil && d.UpstreamSync != nil {
+		ratePolicyErr = d.UpstreamSync.ReconcileChannelRatePolicies(ctx, id)
+	}
 
 	switch {
-	case balErr != nil || subErr != nil || rateErr != nil:
-		progress.Fail(ctx, progress.StageError, joinErrorMessages(balErr, subErr, rateErr))
+	case balErr != nil || subErr != nil || rateErr != nil || ratePolicyErr != nil:
+		progress.Fail(ctx, progress.StageError, joinErrorMessages(balErr, subErr, rateErr, ratePolicyErr))
 	default:
 		progress.OK(ctx, progress.StageDone, "同步完成")
 	}
@@ -854,20 +981,21 @@ func syncAllChannels(c *gin.Context, d *Deps) {
 		}
 		ctx := progress.WithObserver(baseCtx, scoped)
 
-		if err := d.Monitor.RefreshBalance(ctx, &ch); err != nil {
+		balanceErr := d.Monitor.RefreshBalance(ctx, &ch)
+		var subscriptionErr error
+		if balanceErr == nil {
+			subscriptionErr = d.Monitor.CheckSubscriptionUsageAlerts(ctx, &ch)
+		}
+		rateErr := d.Monitor.RefreshRates(ctx, &ch)
+		var policyErr error
+		if rateErr == nil && d.UpstreamSync != nil {
+			policyErr = d.UpstreamSync.ReconcileChannelRatePolicies(ctx, ch.ID)
+		}
+		if err := errors.Join(balanceErr, subscriptionErr, rateErr, policyErr); err != nil {
 			failedCount++
 			scoped.Emit(progress.Event{
 				Stage:   progress.StageError,
 				Message: fmt.Sprintf("同步失败：%v", err),
-				Time:    time.Now(),
-			})
-			continue
-		}
-		if err := d.Monitor.CheckSubscriptionUsageAlerts(ctx, &ch); err != nil {
-			failedCount++
-			scoped.Emit(progress.Event{
-				Stage:   progress.StageError,
-				Message: fmt.Sprintf("订阅检查失败：%v", err),
 				Time:    time.Now(),
 			})
 			continue

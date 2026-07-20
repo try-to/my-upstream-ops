@@ -99,6 +99,7 @@ func main() {
 	notifies := storage.NewNotifications(db)
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
+	ratePolicies := storage.NewRateGroupPolicies(db)
 	monLogs := storage.NewMonitorLogs(db)
 	syncTargets := storage.NewUpstreamSyncTargets(db)
 	syncGroups := storage.NewUpstreamSyncTargetGroups(db)
@@ -124,7 +125,7 @@ func main() {
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
-	syncSvc := syncer.New(channels, rates, cipher, channelSvc, log, syncTargets, syncGroups, upstreamSyncGroups, upstreamSyncAccounts, managedSyncAccounts, syncLogs)
+	syncSvc := syncer.New(channels, rates, ratePolicies, cipher, channelSvc, log, syncTargets, syncGroups, upstreamSyncGroups, upstreamSyncAccounts, managedSyncAccounts, syncLogs)
 	syncSvc.SetDispatcher(dispatcher)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
@@ -177,6 +178,7 @@ func main() {
 		Notifies:      notifies,
 		Announcements: announcements,
 		Rates:         rates,
+		RatePolicies:  ratePolicies,
 		MonLogs:       monLogs,
 		ChannelSvc:    channelSvc,
 		Monitor:       monitorSvc,

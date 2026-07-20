@@ -31,7 +31,7 @@ type Scheduler struct {
 }
 
 type upstreamSyncService interface {
-	SyncAllOnRateScan(ctx context.Context)
+	SyncAllOnRateScan(ctx context.Context, successfulChannelIDs ...uint)
 }
 
 func New(
@@ -111,11 +111,12 @@ func (s *Scheduler) runBalance() {
 func (s *Scheduler) runRates() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	var successfulChannelIDs []uint
 	if s.monitor != nil {
-		s.monitor.ScanAllRates(ctx)
+		successfulChannelIDs = s.monitor.ScanAllRates(ctx)
 	}
 	if s.upstreamSync != nil {
-		s.upstreamSync.SyncAllOnRateScan(ctx)
+		s.upstreamSync.SyncAllOnRateScan(ctx, successfulChannelIDs...)
 	}
 }
 
