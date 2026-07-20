@@ -109,6 +109,8 @@ interface SyncGroupForm {
   custom_error_codes_enabled: boolean;
   custom_error_codes: string;
   rate_sort_direction: "asc" | "desc";
+  rate_auto_toggle_threshold: string;
+  rate_auto_toggle_ratio: number;
   accounts: SyncAccountForm[];
   enabled: boolean;
 }
@@ -149,6 +151,8 @@ const emptySyncGroupForm: SyncGroupForm = {
   custom_error_codes_enabled: false,
   custom_error_codes: "",
   rate_sort_direction: "asc",
+  rate_auto_toggle_threshold: "",
+  rate_auto_toggle_ratio: 1,
   accounts: [],
   enabled: true,
 };
@@ -736,6 +740,11 @@ export function UpstreamSyncSettings() {
       custom_error_codes_enabled: syncGroup.custom_error_codes_enabled,
       custom_error_codes: syncGroup.custom_error_codes ?? "",
       rate_sort_direction: syncGroup.rate_sort_direction || "asc",
+      rate_auto_toggle_threshold:
+        syncGroup.rate_auto_toggle_threshold == null
+          ? ""
+          : String(syncGroup.rate_auto_toggle_threshold),
+      rate_auto_toggle_ratio: syncGroup.rate_auto_toggle_ratio ?? 1,
       accounts:
         syncGroup.accounts?.length > 0
           ? syncGroup.accounts.map(accountToForm)
@@ -755,6 +764,11 @@ export function UpstreamSyncSettings() {
     return {
       ...syncGroupForm,
       target_id: selectedTargetID ?? syncGroupForm.target_id,
+      rate_auto_toggle_threshold:
+        syncGroupForm.rate_auto_toggle_threshold.trim() === ""
+          ? null
+          : Number(syncGroupForm.rate_auto_toggle_threshold),
+      rate_auto_toggle_ratio: syncGroupForm.rate_auto_toggle_ratio,
       model_limits:
         syncGroupForm.model_limits_mode === "custom"
           ? normalizeModelInput(syncGroupForm.model_limits)
@@ -781,6 +795,19 @@ export function UpstreamSyncSettings() {
       if (missingChannelIndex >= 0) {
         toast.error(`同步账号${missingChannelIndex + 1}未选择源渠道`);
         return;
+      }
+      const ratio = Number(syncGroupForm.rate_auto_toggle_ratio);
+      if (!Number.isFinite(ratio) || ratio <= 0) {
+        toast.error("倍率自动启停的计算比例必须大于 0");
+        return;
+      }
+      const thresholdText = syncGroupForm.rate_auto_toggle_threshold.trim();
+      if (thresholdText !== "") {
+        const threshold = Number(thresholdText);
+        if (!Number.isFinite(threshold) || threshold < 0) {
+          toast.error("最大允许倍率必须是大于等于 0 的数字");
+          return;
+        }
       }
       const path = syncGroupForm.id
         ? `/upstream-sync/sync-groups/${syncGroupForm.id}`
@@ -1680,6 +1707,47 @@ function SyncGroupFormView({
                   ))}
                 </SelectContent>
               </Select>
+            </Field>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="最大允许倍率">
+              <Input
+                className="h-8"
+                type="number"
+                min="0"
+                step="any"
+                value={syncGroupForm.rate_auto_toggle_threshold}
+                placeholder="留空不自动启停"
+                onChange={(e) =>
+                  onChange((prev) => ({
+                    ...prev,
+                    rate_auto_toggle_threshold: e.target.value,
+                  }))
+                }
+              />
+            </Field>
+            <Field label="倍率计算比例">
+              <Input
+                className="h-8"
+                type="number"
+                min="0.000001"
+                step="any"
+                value={
+                  Number.isFinite(syncGroupForm.rate_auto_toggle_ratio)
+                    ? String(syncGroupForm.rate_auto_toggle_ratio)
+                    : ""
+                }
+                onChange={(e) =>
+                  onChange((prev) => ({
+                    ...prev,
+                    rate_auto_toggle_ratio: Number(e.target.value),
+                  }))
+                }
+              />
+              <p className="text-[11px] text-muted-foreground">
+                判定倍率 = 上游倍率 × 计算比例
+              </p>
             </Field>
           </div>
 

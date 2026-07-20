@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -126,6 +127,8 @@ type SyncGroupDTO struct {
 	CustomErrorCodesEnabled  bool             `json:"custom_error_codes_enabled"`
 	CustomErrorCodes         string           `json:"custom_error_codes,omitempty"`
 	RateSortDirection        string           `json:"rate_sort_direction"`
+	RateAutoToggleThreshold  *float64         `json:"rate_auto_toggle_threshold"`
+	RateAutoToggleRatio      *float64         `json:"rate_auto_toggle_ratio"`
 	Accounts                 []SyncAccountDTO `json:"accounts"`
 	Enabled                  *bool            `json:"enabled"`
 	ApplyStatus              string           `json:"apply_status,omitempty"`
@@ -183,6 +186,14 @@ type accountApplyResult struct {
 	SyncedModels []string
 	Message      string
 	Changes      []string
+}
+
+type rateAutoToggleDecision struct {
+	Enabled          bool
+	RawRatio         float64
+	CalculationRatio float64
+	CalculatedRate   float64
+	Threshold        float64
 }
 
 const applyAccountWorkerLimit = 5
@@ -425,6 +436,10 @@ func (s *Service) ListSyncGroups() ([]SyncGroupDTO, error) {
 }
 
 func (s *Service) CreateSyncGroup(in SyncGroupDTO) (*SyncGroupDTO, error) {
+	rateThreshold, rateRatio, err := normalizeRateAutoToggleSettings(in.RateAutoToggleThreshold, in.RateAutoToggleRatio)
+	if err != nil {
+		return nil, err
+	}
 	accounts := accountItems(in.Accounts)
 	sourceGroupID := int64(0)
 	sourceChannelID := uint(0)
@@ -454,6 +469,8 @@ func (s *Service) CreateSyncGroup(in SyncGroupDTO) (*SyncGroupDTO, error) {
 		CustomErrorCodesEnabled:  in.CustomErrorCodesEnabled,
 		CustomErrorCodes:         strings.TrimSpace(in.CustomErrorCodes),
 		RateSortDirection:        strings.TrimSpace(in.RateSortDirection),
+		RateAutoToggleThreshold:  rateThreshold,
+		RateAutoToggleRatio:      rateRatio,
 		Enabled:                  boolValue(in.Enabled, true),
 	}
 	if item.RateSortDirection == "" {
@@ -486,6 +503,10 @@ func (s *Service) UpdateSyncGroup(id uint, in SyncGroupDTO) (*SyncGroupDTO, erro
 	if err != nil {
 		return nil, err
 	}
+	rateThreshold, rateRatio, err := normalizeRateAutoToggleSettings(in.RateAutoToggleThreshold, in.RateAutoToggleRatio)
+	if err != nil {
+		return nil, err
+	}
 	item.TargetID = in.TargetID
 	item.DisplayName = strings.TrimSpace(in.DisplayName)
 	item.TargetGroupIDsJSON = marshalUintArray(in.TargetGroupIDs)
@@ -497,6 +518,8 @@ func (s *Service) UpdateSyncGroup(id uint, in SyncGroupDTO) (*SyncGroupDTO, erro
 	item.CustomErrorCodesEnabled = in.CustomErrorCodesEnabled
 	item.CustomErrorCodes = strings.TrimSpace(in.CustomErrorCodes)
 	item.RateSortDirection = strings.TrimSpace(in.RateSortDirection)
+	item.RateAutoToggleThreshold = rateThreshold
+	item.RateAutoToggleRatio = rateRatio
 	item.Enabled = boolValue(in.Enabled, item.Enabled)
 	if item.DisplayName == "" {
 		item.DisplayName = item.Name
@@ -518,6 +541,24 @@ func (s *Service) UpdateSyncGroup(id uint, in SyncGroupDTO) (*SyncGroupDTO, erro
 	s.notifySyncGroupChanged("更新", item, accounts)
 	dto := s.toSyncGroupDTO(item, ids, accounts)
 	return &dto, nil
+}
+
+func normalizeRateAutoToggleSettings(threshold, ratio *float64) (*float64, float64, error) {
+	normalizedRatio := 1.0
+	if ratio != nil {
+		if math.IsNaN(*ratio) || math.IsInf(*ratio, 0) || *ratio <= 0 {
+			return nil, 0, errors.New("rate auto toggle ratio must be greater than zero")
+		}
+		normalizedRatio = *ratio
+	}
+	if threshold == nil {
+		return nil, normalizedRatio, nil
+	}
+	if math.IsNaN(*threshold) || math.IsInf(*threshold, 0) || *threshold < 0 {
+		return nil, 0, errors.New("rate auto toggle threshold must not be negative")
+	}
+	normalizedThreshold := *threshold
+	return &normalizedThreshold, normalizedRatio, nil
 }
 
 func (s *Service) DeleteSyncGroup(id uint) error {
@@ -970,6 +1011,8 @@ func (s *Service) applyAccount(
 	if err != nil {
 		return nil, err
 	}
+	rateDecision, rateDecisionAvailable := resolveRateAutoToggleDecision(syncGroup, syncAccount, sourceGroups)
+	rateGuardConfigured := syncGroup.RateAutoToggleThreshold != nil
 	keyName := sourceAPIKeyName(syncGroup)
 	key, secret, err := s.ensureSourceAPIKey(ctx, syncGroup, syncAccount, keyName)
 	if err != nil {
@@ -1053,8 +1096,10 @@ func (s *Service) applyAccount(
 			return nil, errorWithChanges(err, change)
 		}
 	}
-	if err := s.syncRemoteAccountSchedulable(ctx, adminTarget, client, account); err != nil {
-		return nil, err
+	if !rateGuardConfigured {
+		if err := s.syncRemoteAccountSchedulable(ctx, adminTarget, client, account); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.managedAccounts.Upsert(&storage.UpstreamSyncManagedAccount{
 		SyncGroupID:        syncGroup.ID,
@@ -1068,9 +1113,16 @@ func (s *Service) applyAccount(
 	}); err != nil {
 		return nil, err
 	}
-	testMessage, testChange, err := s.testManagedTargetAccount(ctx, adminTarget, client, syncAccount, account)
+	testMessage, testChange, err := s.testManagedTargetAccount(ctx, adminTarget, client, syncAccount, account, !rateGuardConfigured)
 	if err != nil {
 		return nil, err
+	}
+	rateChange := ""
+	if rateDecisionAvailable {
+		rateChange, err = s.applyRateAutoToggleDecision(ctx, adminTarget, client, syncAccount, account, rateDecision)
+		if err != nil {
+			return nil, err
+		}
 	}
 	msg := fmt.Sprintf(
 		"账号%d：%s远端账号 %s(ID %d)，源渠道 %s(ID %d)，源分组 %s，倍率 %s，权重 %d，并发 %d",
@@ -1097,7 +1149,7 @@ func (s *Service) applyAccount(
 	return &accountApplyResult{
 		SyncedModels: syncedModels,
 		Message:      msg,
-		Changes:      append(accountChangeDetails(syncAccount, previous, accountReq, account.ID), singleChange(testChange)...),
+		Changes:      append(append(accountChangeDetails(syncAccount, previous, accountReq, account.ID), singleChange(testChange)...), singleChange(rateChange)...),
 	}, nil
 }
 
@@ -1107,6 +1159,7 @@ func (s *Service) testManagedTargetAccount(
 	client *sub2api.AdminClient,
 	syncAccount *storage.UpstreamSyncAccount,
 	account *sub2api.AdminAccount,
+	manageSchedulable bool,
 ) (string, string, error) {
 	if syncAccount == nil || account == nil || !syncAccount.TestEnabled {
 		return "", "", nil
@@ -1116,36 +1169,153 @@ func (s *Service) testManagedTargetAccount(
 		models, err := client.ListAccountModels(ctx, adminTarget, account.ID)
 		if err != nil {
 			change := testRemoteAccountChange(syncAccount, account.Name, account.ID, "", false, err.Error())
-			if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
-				return "", "", setErr
+			if manageSchedulable {
+				if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
+					return "", "", setErr
+				}
+			} else {
+				change = ""
 			}
-			return fmt.Sprintf("测试失败，调度已禁用：%s", err.Error()), change, nil
+			return fmt.Sprintf("测试失败%s：%s", schedulableControlSuffix(manageSchedulable), err.Error()), change, nil
 		}
 		if len(models) == 0 {
 			err := errors.New("account models is empty")
 			change := testRemoteAccountChange(syncAccount, account.Name, account.ID, "", false, err.Error())
-			if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
-				return "", "", setErr
+			if manageSchedulable {
+				if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
+					return "", "", setErr
+				}
+			} else {
+				change = ""
 			}
-			return fmt.Sprintf("测试失败，调度已禁用：%s", err.Error()), change, nil
+			return fmt.Sprintf("测试失败%s：%s", schedulableControlSuffix(manageSchedulable), err.Error()), change, nil
 		}
 		model = models[0]
 	}
 	if _, err := client.TestAccount(ctx, adminTarget, account.ID, model); err != nil {
 		change := testRemoteAccountChange(syncAccount, account.Name, account.ID, model, false, err.Error())
-		if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
-			return "", "", setErr
+		if manageSchedulable {
+			if _, setErr := client.SetAccountSchedulable(ctx, adminTarget, account.ID, false); setErr != nil {
+				return "", "", setErr
+			}
+		} else {
+			change = ""
 		}
-		return fmt.Sprintf("测试模型 %s 失败，调度已禁用：%s", model, err.Error()), change, nil
+		return fmt.Sprintf("测试模型 %s 失败%s：%s", model, schedulableControlSuffix(manageSchedulable), err.Error()), change, nil
 	}
-	if _, err := client.SetAccountSchedulable(ctx, adminTarget, account.ID, true); err != nil {
-		return "", "", err
+	if manageSchedulable {
+		if _, err := client.SetAccountSchedulable(ctx, adminTarget, account.ID, true); err != nil {
+			return "", "", err
+		}
+	} else {
+		return fmt.Sprintf("测试模型 %s 通过（调度由倍率规则控制）", model), "", nil
 	}
 	change := ""
 	if !account.Schedulable {
 		change = testRemoteAccountChange(syncAccount, account.Name, account.ID, model, true, "")
 	}
 	return fmt.Sprintf("测试模型 %s 通过，调度已启用", model), change, nil
+}
+
+func schedulableControlSuffix(manageSchedulable bool) string {
+	if manageSchedulable {
+		return "，调度已禁用"
+	}
+	return "（调度由倍率规则控制）"
+}
+
+func (s *Service) applyRateAutoToggleDecision(
+	ctx context.Context,
+	adminTarget sub2api.AdminTarget,
+	client *sub2api.AdminClient,
+	syncAccount *storage.UpstreamSyncAccount,
+	account *sub2api.AdminAccount,
+	decision rateAutoToggleDecision,
+) (string, error) {
+	if account == nil || syncAccount == nil || account.Schedulable == decision.Enabled {
+		return "", nil
+	}
+	updated, err := client.SetAccountSchedulable(ctx, adminTarget, account.ID, decision.Enabled)
+	if err != nil {
+		return "", err
+	}
+	if updated != nil {
+		account.Schedulable = updated.Schedulable
+	} else {
+		account.Schedulable = decision.Enabled
+	}
+	state := "已禁用调度"
+	comparison := "超过"
+	if decision.Enabled {
+		state = "已启用调度"
+		comparison = "不超过"
+	}
+	return fmt.Sprintf(
+		"账号%d：上游倍率 %s * 计算比例 %s = %s，%s最大允许倍率 %s，%s",
+		syncAccount.Position+1,
+		formatNumber(decision.RawRatio),
+		formatNumber(decision.CalculationRatio),
+		formatNumber(decision.CalculatedRate),
+		comparison,
+		formatNumber(decision.Threshold),
+		state,
+	), nil
+}
+
+func resolveRateAutoToggleDecision(
+	syncGroup *storage.UpstreamSyncGroup,
+	syncAccount *storage.UpstreamSyncAccount,
+	sourceGroups []connector.APIKeyGroup,
+) (rateAutoToggleDecision, bool) {
+	if syncGroup == nil || syncAccount == nil || syncGroup.RateAutoToggleThreshold == nil {
+		return rateAutoToggleDecision{}, false
+	}
+	threshold := *syncGroup.RateAutoToggleThreshold
+	ratio := syncGroup.RateAutoToggleRatio
+	if ratio == 0 {
+		ratio = 1
+	}
+	if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 {
+		return rateAutoToggleDecision{}, false
+	}
+	group, ok := sourceGroupForRate(syncAccount, sourceGroups)
+	if !ok || math.IsNaN(group.Ratio) || math.IsInf(group.Ratio, 0) || group.Ratio < 0 {
+		return rateAutoToggleDecision{}, false
+	}
+	calculated := group.Ratio * ratio
+	if math.IsNaN(calculated) || math.IsInf(calculated, 0) {
+		return rateAutoToggleDecision{}, false
+	}
+	return rateAutoToggleDecision{
+		Enabled:          calculated <= threshold,
+		RawRatio:         group.Ratio,
+		CalculationRatio: ratio,
+		CalculatedRate:   calculated,
+		Threshold:        threshold,
+	}, true
+}
+
+func sourceGroupForRate(account *storage.UpstreamSyncAccount, groups []connector.APIKeyGroup) (connector.APIKeyGroup, bool) {
+	if account == nil {
+		return connector.APIKeyGroup{}, false
+	}
+	if account.SourceGroupID != nil {
+		for _, group := range groups {
+			if group.ID != nil && *group.ID == *account.SourceGroupID {
+				return group, true
+			}
+		}
+	}
+	name := strings.TrimSpace(account.SourceGroupName)
+	if name == "" {
+		return connector.APIKeyGroup{}, false
+	}
+	for _, group := range groups {
+		if strings.EqualFold(strings.TrimSpace(group.Name), name) {
+			return group, true
+		}
+	}
+	return connector.APIKeyGroup{}, false
 }
 
 func (s *Service) ensureDisabledPlaceholderTargetForAccount(
@@ -2397,6 +2567,17 @@ func ptrBool(value bool) *bool {
 	return &value
 }
 
+func ptrFloat64(value float64) *float64 {
+	return &value
+}
+
+func normalizeRateAutoToggleRatio(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 1
+	}
+	return value
+}
+
 func positiveOrDefault(v, fallback int) int {
 	if v <= 0 {
 		return fallback
@@ -2477,6 +2658,8 @@ func (s *Service) toSyncGroupDTO(item *storage.UpstreamSyncGroup, ids []uint, ac
 		CustomErrorCodesEnabled:  item.CustomErrorCodesEnabled,
 		CustomErrorCodes:         item.CustomErrorCodes,
 		RateSortDirection:        item.RateSortDirection,
+		RateAutoToggleThreshold:  item.RateAutoToggleThreshold,
+		RateAutoToggleRatio:      ptrFloat64(normalizeRateAutoToggleRatio(item.RateAutoToggleRatio)),
 		Accounts:                 accountDTOs(accounts),
 		Enabled:                  ptrBool(item.Enabled),
 		ApplyStatus:              item.ApplyStatus,

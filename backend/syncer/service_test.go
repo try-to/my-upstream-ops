@@ -2188,6 +2188,93 @@ func TestUpdateSyncGroupDoesNotChangePlatform(t *testing.T) {
 	}
 }
 
+func TestResolveRateAutoToggleDecision(t *testing.T) {
+	threshold := 1.0
+	ratio := 2.0
+	groupID := int64(7)
+	account := &storage.UpstreamSyncAccount{SourceGroupID: &groupID, SourceGroupName: "source"}
+	group := &storage.UpstreamSyncGroup{RateAutoToggleThreshold: &threshold, RateAutoToggleRatio: ratio}
+
+	decision, ok := resolveRateAutoToggleDecision(group, account, []connector.APIKeyGroup{{ID: &groupID, Name: "source", Ratio: 0.6}})
+	if !ok || decision.Enabled || decision.CalculatedRate != 1.2 {
+		t.Fatalf("over-threshold decision = %#v, %v", decision, ok)
+	}
+
+	decision, ok = resolveRateAutoToggleDecision(group, account, []connector.APIKeyGroup{{ID: &groupID, Name: "source", Ratio: 0.5}})
+	if !ok || !decision.Enabled || decision.CalculatedRate != 1 {
+		t.Fatalf("equal-threshold decision = %#v, %v", decision, ok)
+	}
+
+	account.SourceGroupID = nil
+	decision, ok = resolveRateAutoToggleDecision(group, account, []connector.APIKeyGroup{{Name: "SOURCE", Ratio: 0.5}})
+	if !ok || !decision.Enabled {
+		t.Fatalf("name fallback decision = %#v, %v", decision, ok)
+	}
+
+	group.RateAutoToggleThreshold = nil
+	if _, ok := resolveRateAutoToggleDecision(group, account, []connector.APIKeyGroup{{Name: "source", Ratio: 0.5}}); ok {
+		t.Fatal("nil threshold should skip rate auto toggle")
+	}
+	group.RateAutoToggleThreshold = &threshold
+	if _, ok := resolveRateAutoToggleDecision(group, account, nil); ok {
+		t.Fatal("missing source group should skip rate auto toggle")
+	}
+}
+
+func TestRateAutoToggleAppliesAndRestoresSchedulable(t *testing.T) {
+	srv, admin := newAdminServer(t)
+	defer srv.Close()
+	db := openSyncerTestDB(t)
+	sourceGroupID := int64(1)
+	fake := &fakeChannelService{groups: []connector.APIKeyGroup{{ID: &sourceGroupID, Name: "source-low", Ratio: 0.6}}}
+	svc := newTestService(t, db, fake)
+	ch := seedChannel(t, db)
+	target, err := svc.CreateTarget(context.Background(), TargetInput{Name: "target", BaseURL: srv.URL, AdminAPIKey: "admin-key", Enabled: true})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	targetGroups, err := svc.SyncTargetGroups(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("sync target groups: %v", err)
+	}
+	threshold := 1.0
+	ratio := 2.0
+	rule, err := svc.CreateSyncGroup(SyncGroupDTO{
+		NameTemplate:            "rate-guard-{同步分组ID}",
+		TargetID:                target.ID,
+		TargetGroupIDs:          []uint{targetGroups[0].ID},
+		Platform:                "openai",
+		RateAutoToggleThreshold: &threshold,
+		RateAutoToggleRatio:     &ratio,
+		Accounts: []SyncAccountDTO{{
+			SourceChannelID: ch.ID,
+			SourceGroupID:   &sourceGroupID,
+			RateConvertMode: "raw",
+			Enabled:         true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create sync group: %v", err)
+	}
+	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	if admin.accounts[10]["schedulable"] != false {
+		t.Fatalf("initial schedulable = %#v, want false", admin.accounts[10]["schedulable"])
+	}
+	if admin.accounts[10]["status"] != "active" {
+		t.Fatalf("rate guard changed status = %#v, want active", admin.accounts[10]["status"])
+	}
+
+	fake.groups[0].Ratio = 0.5
+	if _, err := svc.ApplySyncGroup(context.Background(), rule.ID); err != nil {
+		t.Fatalf("restore apply: %v", err)
+	}
+	if admin.accounts[10]["schedulable"] != true {
+		t.Fatalf("restored schedulable = %#v, want true", admin.accounts[10]["schedulable"])
+	}
+}
+
 func TestSyncGroupChangeDispatchesNotification(t *testing.T) {
 	received := make(chan map[string]any, 3)
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

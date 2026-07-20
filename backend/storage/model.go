@@ -347,6 +347,8 @@ type UpstreamSyncGroup struct {
 	CustomErrorCodesEnabled  bool       `gorm:"default:false" json:"custom_error_codes_enabled"`
 	CustomErrorCodes         string     `gorm:"type:text" json:"custom_error_codes,omitempty"`
 	RateSortDirection        string     `gorm:"size:16;not null;default:'asc'" json:"rate_sort_direction"`
+	RateAutoToggleThreshold  *float64   `json:"rate_auto_toggle_threshold,omitempty"`
+	RateAutoToggleRatio      float64    `gorm:"not null;default:1" json:"rate_auto_toggle_ratio"`
 	Enabled                  bool       `gorm:"default:true" json:"enabled"`
 	ApplyStatus              string     `gorm:"size:64" json:"apply_status,omitempty"`
 	ApplyError               string     `gorm:"type:text" json:"apply_error,omitempty"`

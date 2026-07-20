@@ -8,6 +8,8 @@
 /server
 /bin/
 /tmp/
+/.tools/
+/.cache/
 /upstream-ops
 /upstream-ops.exe
 /upstream-ops-*.tar

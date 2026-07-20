@@ -550,6 +550,8 @@ export interface UpstreamSyncGroup {
   custom_error_codes_enabled: boolean
   custom_error_codes?: string
   rate_sort_direction: "asc" | "desc"
+  rate_auto_toggle_threshold?: number | null
+  rate_auto_toggle_ratio: number
   accounts: UpstreamSyncAccount[]
   enabled: boolean
   apply_status?: string
